@@ -1,0 +1,10 @@
+{
+  "manifest_version": 3,
+  "name": "SECOP II - Enviador a n8n",
+  "version": "1.0",
+  "permissions": ["cookies", "activeTab"],
+  "host_permissions": ["https://community.secop.gov.co/*"],
+  "action": {
+    "default_popup": "popup.html"
+  }
+}

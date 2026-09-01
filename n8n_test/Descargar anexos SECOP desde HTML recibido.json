@@ -1,0 +1,176 @@
+{
+  "name": "Descargar anexos SECOP desde HTML recibido",
+  "nodes": [
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "9d0ea258-3044-4911-8664-a75df4f7e49f",
+              "name": "codigoProceso",
+              "value": "IP 009 DT de 2026 MANTENIMIENTO RECARGA Y COMPRA",
+              "type": "string"
+            },
+            {
+              "id": "3b891b17-9623-4ee4-93f0-da3952cdd47d",
+              "name": "htmlDocumentos",
+              "value": "<tbody><tr id=\"grdGridDocumentList_header\"> \t\t<th id=\"grdGridDocumentList_thColumnDocumentName\" data-sentencecode=\"Community.Tendering.OpportunityDetail.tdColumnDocumentNameP2Gen@\" width=\"\" data-translated=\"true\">Nombre del documento</th><th id=\"grdGridDocumentList_thColumnDownloadDocument\" width=\"\"></th> \t</tr><tr id=\"grdGridDocumentList_tr0\" class=\"gridLineLight\"><td id=\"grdGridDocumentListtd_thColumnDocumentName\"><span id=\"tdColumnDocumentNameP2Gen_spnDocumentName_0\" class=\"VortalSpan\">1. ANALISIS DEL SECTOR - EXTINTORES 2026.pdf</span><script type=\"text/javascript\">translator.loadFileAndTranslateElement($('#tdColumnDocumentNameP2Gen_spnDocumentName_0'),'https://community.secop.gov.co/StaticContent/Translations/Community/Tendering/OpportunityDetail/es-CO.json_v639234737012725026')</script></td><td id=\"grdGridDocumentListtd_thColumnDownloadDocument\"><a id=\"lnkDownloadLinkP3Gen_0\" data-sentencecode=\"Community.Tendering.OpportunityDetail.lnkDownloadLinkP3Gen@\" title=\"Descargar\" onclick=\"javascript:getAction('/Public/Tendering/OpportunityDetail/DownloadFile' + '?' + 'documentFileId=' + '841540565' + '&amp;mkey=211fcd56_fb66_4f1b_906d_eeb02880d01e',true);\" name=\"lnkDownloadLinkP3Gen_0\" href=\"javascript:void(0);\" data-translated=\"true\">Descargar</a><span id=\"spnAfterPaymentGen_0\" style=\"display:none\"></span></td></tr><tr id=\"grdGridDocumentList_tr1\" class=\"gridLineDark\"><td id=\"grdGridDocumentListtd_thColumnDocumentName\"><span id=\"tdColumnDocumentNameP2Gen_spnDocumentName_1\" class=\"VortalSpan\">1.2 ESTUDIO DE MERCADO.pdf</span><script type=\"text/javascript\">translator.loadFileAndTranslateElement($('#tdColumnDocumentNameP2Gen_spnDocumentName_1'),'https://community.secop.gov.co/StaticContent/Translations/Community/Tendering/OpportunityDetail/es-CO.json_v639234737012725026')</script></td><td id=\"grdGridDocumentListtd_thColumnDownloadDocument\"><a id=\"lnkDownloadLinkP3Gen_1\" data-sentencecode=\"Community.Tendering.OpportunityDetail.lnkDownloadLinkP3Gen@\" title=\"Descargar\" onclick=\"javascript:getAction('/Public/Tendering/OpportunityDetail/DownloadFile' + '?' + 'documentFileId=' + '841540566' + '&amp;mkey=211fcd56_fb66_4f1b_906d_eeb02880d01e',true);\" name=\"lnkDownloadLinkP3Gen_1\" href=\"javascript:void(0);\" data-translated=\"true\">Descargar</a><span id=\"spnAfterPaymentGen_1\" style=\"display:none\"></span></td></tr><tr id=\"grdGridDocumentList_tr2\" class=\"gridLineLight\"><td id=\"grdGridDocumentListtd_thColumnDocumentName\"><span id=\"tdColumnDocumentNameP2Gen_spnDocumentName_2\" class=\"VortalSpan\">2. ESTUDIOS PREVIOS -  EXTINTORES 2026.pdf</span><script type=\"text/javascript\">translator.loadFileAndTranslateElement($('#tdColumnDocumentNameP2Gen_spnDocumentName_2'),'https://community.secop.gov.co/StaticContent/Translations/Community/Tendering/OpportunityDetail/es-CO.json_v639234737012725026')</script></td><td id=\"grdGridDocumentListtd_thColumnDownloadDocument\"><a id=\"lnkDownloadLinkP3Gen_2\" data-sentencecode=\"Community.Tendering.OpportunityDetail.lnkDownloadLinkP3Gen@\" title=\"Descargar\" onclick=\"javascript:getAction('/Public/Tendering/OpportunityDetail/DownloadFile' + '?' + 'documentFileId=' + '841540567' + '&amp;mkey=211fcd56_fb66_4f1b_906d_eeb02880d01e',true);\" name=\"lnkDownloadLinkP3Gen_2\" href=\"javascript:void(0);\" data-translated=\"true\">Descargar</a><span id=\"spnAfterPaymentGen_2\" style=\"display:none\"></span></td></tr><tr id=\"grdGridDocumentList_tr3\" class=\"gridLineDark\"><td id=\"grdGridDocumentListtd_thColumnDocumentName\"><span id=\"tdColumnDocumentNameP2Gen_spnDocumentName_3\" class=\"VortalSpan\">3. RELACION DE EXTINTORES A INTERVENIR 2026.pdf</span><script type=\"text/javascript\">translator.loadFileAndTranslateElement($('#tdColumnDocumentNameP2Gen_spnDocumentName_3'),'https://community.secop.gov.co/StaticContent/Translations/Community/Tendering/OpportunityDetail/es-CO.json_v639234737012725026')</script></td><td id=\"grdGridDocumentListtd_thColumnDownloadDocument\"><a id=\"lnkDownloadLinkP3Gen_3\" data-sentencecode=\"Community.Tendering.OpportunityDetail.lnkDownloadLinkP3Gen@\" title=\"Descargar\" onclick=\"javascript:getAction('/Public/Tendering/OpportunityDetail/DownloadFile' + '?' + 'documentFileId=' + '841540568' + '&amp;mkey=211fcd56_fb66_4f1b_906d_eeb02880d01e',true);\" name=\"lnkDownloadLinkP3Gen_3\" href=\"javascript:void(0);\" data-translated=\"true\">Descargar</a><span id=\"spnAfterPaymentGen_3\" style=\"display:none\"></span></td></tr><tr id=\"grdGridDocumentList_tr4\" class=\"gridLineLight\"><td id=\"grdGridDocumentListtd_thColumnDocumentName\"><span id=\"tdColumnDocumentNameP2Gen_spnDocumentName_4\" class=\"VortalSpan\">4. CDP 38626.pdf</span><script type=\"text/javascript\">translator.loadFileAndTranslateElement($('#tdColumnDocumentNameP2Gen_spnDocumentName_4'),'https://community.secop.gov.co/StaticContent/Translations/Community/Tendering/OpportunityDetail/es-CO.json_v639234737012725026')</script></td><td id=\"grdGridDocumentListtd_thColumnDownloadDocument\"><a id=\"lnkDownloadLinkP3Gen_4\" data-sentencecode=\"Community.Tendering.OpportunityDetail.lnkDownloadLinkP3Gen@\" title=\"Descargar\" onclick=\"javascript:getAction('/Public/Tendering/OpportunityDetail/DownloadFile' + '?' + 'documentFileId=' + '841540569' + '&amp;mkey=211fcd56_fb66_4f1b_906d_eeb02880d01e',true);\" name=\"lnkDownloadLinkP3Gen_4\" href=\"javascript:void(0);\" data-translated=\"true\">Descargar</a><span id=\"spnAfterPaymentGen_4\" style=\"display:none\"></span></td></tr><tr id=\"grdGridDocumentList_tr5\" class=\"gridLineDark\"><td id=\"grdGridDocumentListtd_thColumnDocumentName\"><span id=\"tdColumnDocumentNameP2Gen_spnDocumentName_5\" class=\"VortalSpan\">5. IP 009 DT de 2026 MANTENIMIENTO RECARGA Y COMPRA DE EXTINTORES.pdf</span><script type=\"text/javascript\">translator.loadFileAndTranslateElement($('#tdColumnDocumentNameP2Gen_spnDocumentName_5'),'https://community.secop.gov.co/StaticContent/Translations/Community/Tendering/OpportunityDetail/es-CO.json_v639234737012725026')</script></td><td id=\"grdGridDocumentListtd_thColumnDownloadDocument\"><a id=\"lnkDownloadLinkP3Gen_5\" data-sentencecode=\"Community.Tendering.OpportunityDetail.lnkDownloadLinkP3Gen@\" title=\"Descargar\" onclick=\"javascript:getAction('/Public/Tendering/OpportunityDetail/DownloadFile' + '?' + 'documentFileId=' + '841540570' + '&amp;mkey=211fcd56_fb66_4f1b_906d_eeb02880d01e',true);\" name=\"lnkDownloadLinkP3Gen_5\" href=\"javascript:void(0);\" data-translated=\"true\">Descargar</a><span id=\"spnAfterPaymentGen_5\" style=\"display:none\"></span></td></tr><tr id=\"grdGridDocumentList_tr6\" class=\"gridLineLight\"><td id=\"grdGridDocumentListtd_thColumnDocumentName\"><span id=\"tdColumnDocumentNameP2Gen_spnDocumentName_6\" class=\"VortalSpan\">gcfl08_FORMATOS ANEXO.doc</span><script type=\"text/javascript\">translator.loadFileAndTranslateElement($('#tdColumnDocumentNameP2Gen_spnDocumentName_6'),'https://community.secop.gov.co/StaticContent/Translations/Community/Tendering/OpportunityDetail/es-CO.json_v639234737012725026')</script></td><td id=\"grdGridDocumentListtd_thColumnDownloadDocument\"><a id=\"lnkDownloadLinkP3Gen_6\" data-sentencecode=\"Community.Tendering.OpportunityDetail.lnkDownloadLinkP3Gen@\" title=\"Descargar\" onclick=\"javascript:getAction('/Public/Tendering/OpportunityDetail/DownloadFile' + '?' + 'documentFileId=' + '841540571' + '&amp;mkey=211fcd56_fb66_4f1b_906d_eeb02880d01e',true);\" name=\"lnkDownloadLinkP3Gen_6\" href=\"javascript:void(0);\" data-translated=\"true\">Descargar</a><span id=\"spnAfterPaymentGen_6\" style=\"display:none\"></span></td></tr> </tbody>",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        32,
+        -192
+      ],
+      "id": "85c7db3a-222d-4cb2-b246-06ccc54c60e8",
+      "name": "Pegar datos del proceso"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -176,
+        -224
+      ],
+      "id": "6d506601-c087-42d8-b9f7-33a1b0602dd1",
+      "name": "Ejecutar manualmente"
+    },
+    {
+      "parameters": {
+        "jsCode": "const codigoProceso = String($json.codigoProceso || '').trim();\n\nlet html = String($json.htmlDocumentos || '')\n  .replace(/\\\\([\"'<>])/g, '$1')\n  .replace(/documentFileId=['\"]\\s*\\+\\s*['\"]/gi, 'documentFileId=');\n\nif (!codigoProceso) {\n  throw new Error('Falta el campo codigoProceso.');\n}\n\nif (!html) {\n  throw new Error('Falta el campo htmlDocumentos.');\n}\n\nconst baseUrl = 'https://community.secop.gov.co';\n\nconst limpiar = (texto) =>\n  texto\n    .replace(/<[^>]*>/g, '')\n    .replace(/&amp;/g, '&')\n    .replace(/&nbsp;/g, ' ')\n    .trim();\n\nconst nombreSeguro = (nombre) =>\n  nombre.replace(/[\\\\/:*?\"<>|]/g, '_').replace(/\\s+/g, ' ').trim();\n\nconst filas = html.match(/<tr\\b[\\s\\S]*?<\\/tr>/gi) || [];\nconst salida = [];\nlet numero = 0;\n\nfor (const fila of filas) {\n  const nombre = fila.match(\n    /id=[\"'][^\"']*spnDocumentName[^\"']*[\"'][^>]*>([\\s\\S]*?)<\\/span>/i\n  );\n\n  const archivoId = fila.match(/documentFileId\\s*=\\s*(\\d+)/i);\n  const mkey = fila.match(/mkey\\s*=\\s*([^'\"&\\s<]+)/i);\n\n  if (!nombre || !archivoId || !mkey) {\n    continue;\n  }\n\n  numero++;\n\n  const nombreOriginal = limpiar(nombre[1]);\n\n  salida.push({\n    json: {\n      codigoProceso,\n      carpetaDestino: codigoProceso,\n      fileNameOriginal: nombreOriginal,\n      fileNameDescarga:\n        `${nombreSeguro(codigoProceso)}__${String(numero).padStart(2, '0')}__${nombreSeguro(nombreOriginal)}`,\n      downloadUrl:\n        `${baseUrl}/Public/Tendering/OpportunityDetail/DownloadFile` +\n        `?documentFileId=${archivoId[1]}&mkey=${mkey[1]}`\n    }\n  });\n}\n\nif (salida.length === 0) {\n  throw new Error(\n    `No encontré documentos. Longitud de htmlDocumentos: ${html.length} caracteres.`\n  );\n}\n\nreturn salida;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        256,
+        -192
+      ],
+      "id": "770519b7-d739-4aee-a026-1b9079d152ba",
+      "name": "Crear lista organizada de anexos"
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.downloadUrl }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        480,
+        -192
+      ],
+      "id": "5c57d7ef-13ec-49cc-b0a6-ffd403c7e1c3",
+      "name": "Descargar cada anexo"
+    },
+    {
+      "parameters": {
+        "jsCode": "for (const item of items) {\n  if (item.binary && item.binary.data) {\n    item.binary.data.fileName = item.json.fileNameDescarga;\n  }\n}\n\nreturn items;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        704,
+        -192
+      ],
+      "id": "95d8490c-ff32-431b-82cd-0450eeae4a86",
+      "name": "Asignar nombre organizado"
+    },
+    {
+      "parameters": {
+        "operation": "write",
+        "fileName": "{{ 'E:/OneDrive/Documentos/Empresa Puentes/Compra_Directa/' + $json.fileNameDescarga }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.readWriteFile",
+      "typeVersion": 1.1,
+      "position": [
+        928,
+        -192
+      ],
+      "id": "31baba5d-5399-4219-94ca-1540db8a0615",
+      "name": "Read/Write Files from Disk"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Ejecutar manualmente": {
+      "main": [
+        [
+          {
+            "node": "Pegar datos del proceso",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pegar datos del proceso": {
+      "main": [
+        [
+          {
+            "node": "Crear lista organizada de anexos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Crear lista organizada de anexos": {
+      "main": [
+        [
+          {
+            "node": "Descargar cada anexo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Descargar cada anexo": {
+      "main": [
+        [
+          {
+            "node": "Asignar nombre organizado",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Asignar nombre organizado": {
+      "main": [
+        [
+          {
+            "node": "Read/Write Files from Disk",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "4b26208f-da4e-4816-b4a6-be9585b62f4d",
+  "meta": {
+    "instanceId": "c1376ef388fd7a156c03b81df287367ce9379d439d35d5fb35b863a2ab4dc093"
+  },
+  "nodeGroups": [],
+  "id": "xKHItGWimVUFVGdg",
+  "tags": []
+}

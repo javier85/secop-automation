@@ -1,0 +1,137 @@
+services:
+  # --------------------------------------------------
+  # 1. Microservicio Extractor (FastAPI + Playwright)
+  # --------------------------------------------------
+  downloader:
+    build:
+      context: ./downloader
+      dockerfile: Dockerfile
+    container_name: secop-downloader
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - PYTHONUNBUFFERED=1
+      - TZ=America/Bogota
+    volumes:
+      - ./downloader:/app
+      - ./documentos:/data/documentos  # <--- CORREGIDO (ahora apunta a C:\Orqidea_Project\secop-automation\documentos)
+    networks:
+      - secop-network
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+
+  # --------------------------------------------------
+  # 2. Orquestador de Automatización (n8n)
+  # --------------------------------------------------
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:2.36.7
+    container_name: secop-n8n
+    restart: unless-stopped
+    ports:
+      - "5678:5678"
+    environment:
+      - TZ=America/Bogota
+      - GENERIC_TIMEZONE=America/Bogota
+      - N8N_SECURE_COOKIE=false
+      - N8N_EDITOR_BASE_URL=http://localhost:5678
+      - N8N_WEBHOOK_URL=http://localhost:5678/
+      - N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true
+      - N8N_RESTRICT_FILE_ACCESS_TO=/files/compra_directa
+      # --- Base de Datos Interna en PostgreSQL ---
+      - DB_TYPE=postgresdb
+      - DB_POSTGRESDB_HOST=postgres
+      - DB_POSTGRESDB_PORT=5432
+      - DB_POSTGRESDB_DATABASE=licitaciones_db
+      - DB_POSTGRESDB_SCHEMA=n8n
+      - DB_POSTGRESDB_USER=licita_user
+      - DB_POSTGRESDB_PASSWORD=licita_pass
+    volumes:
+      - "E:/OneDrive/Documentos/Empresa Puentes/Compra Directa:/files/compra_directa"
+      - n8n_data:/home/node/.n8n
+      - ./documentos:/data/documentos
+    depends_on:
+      - postgres
+      - ollama
+      - downloader
+    networks:
+      - secop-network
+
+  # --------------------------------------------------
+  # 3. Motor de Inteligencia Artificial Local (Ollama)
+  # --------------------------------------------------
+  ollama:
+    image: ollama/ollama:latest
+    container_name: secop-ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    environment:
+      - TZ=America/Bogota
+    volumes:
+      - ollama_data:/root/.ollama
+    networks:
+      - secop-network
+
+  # --------------------------------------------------
+  # 4. Base de Datos Relacional (PostgreSQL)
+  # --------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: secop-postgres
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=licita_user
+      - POSTGRES_PASSWORD=licita_pass
+      - POSTGRES_DB=licitaciones_db
+      - TZ=America/Bogota
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - secop-network
+
+  # --------------------------------------------------
+  # 5. App Unificada de Cotizaciones (Streamlit)
+  # --------------------------------------------------
+  licita-app:
+    build:
+      context: ./licita-app
+      dockerfile: Dockerfile
+    container_name: secop-licita-app
+    restart: unless-stopped
+    ports:
+      - "8501:8501"
+    environment:
+      - DATABASE_URL=postgresql://licita_user:licita_pass@postgres:5432/licitaciones_db
+      - OLLAMA_URL=http://ollama:11434
+      - N8N_WEBHOOK_SECOP_URL=http://n8n:5678/webhook/sync-secop
+      - N8N_WEBHOOK_NOTIFICACION_URL=http://n8n:5678/webhook/notificar-cotizacion
+      - BASE_SECOP_DIR=/data/secop    # <--- Ruta interna dentro de Linux
+      - TZ=America/Bogota
+    volumes:
+      - ./licita-app:/app
+      - ./documentos:/data/documentos
+      - "E:/OneDrive/Documentos/Empresa Puentes/Secop:/data/secop" # <--- MAPEADO A TU DISCO E
+    depends_on:
+      - postgres
+      - ollama
+      - n8n
+    networks:
+      - secop-network
+
+# --------------------------------------------------
+# Volúmenes Persistentes
+# --------------------------------------------------
+volumes:
+  n8n_data:
+  ollama_data:
+  postgres_data:
+
+# --------------------------------------------------
+# Red Interna
+# --------------------------------------------------
+networks:
+  secop-network:
+    driver: bridge

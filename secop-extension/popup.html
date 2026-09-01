@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { width: 320px; font-family: Arial, sans-serif; padding: 12px; box-sizing: border-box; }
+    h3 { margin: 0 0 10px 0; color: #1e293b; font-size: 15px; text-align: center; }
+    .card { background: #f8fafc; border: 1px solid #e2e8f0; padding: 8px; border-radius: 6px; margin-bottom: 10px; }
+    label { font-size: 11px; font-weight: bold; color: #475569; display: block; margin-bottom: 4px; }
+    input[type="text"] { width: 100%; padding: 8px; border: 1px solid #cbd5e1; border-radius: 4px; font-size: 12px; box-sizing: border-box; }
+    button.btn-primary { background-color: #2563eb; color: white; border: none; padding: 9px; border-radius: 4px; cursor: pointer; font-weight: bold; width: 100%; margin-top: 6px; }
+    button.btn-secondary { background-color: #64748b; color: white; border: none; padding: 6px; border-radius: 4px; cursor: pointer; font-size: 11px; width: 100%; }
+    button:hover { opacity: 0.9; }
+    #status { font-size: 12px; text-align: center; font-weight: bold; margin-top: 8px; word-break: break-word; }
+  </style>
+</head>
+<body>
+  <h3>Extractor de Anexos SECOP II</h3>
+
+  <!-- Sección de Renovación de Cookie -->
+  <div class="card">
+    <button id="btnActualizarCookie" class="btn-secondary">🔄 Actualizar Sesión desde Navegador</button>
+  </div>
+
+  <!-- Sección Repetitiva de URLs -->
+  <div class="card">
+    <label for="txtUrl">URL de la Licitación / Contrato:</label>
+    <input type="text" id="txtUrl" placeholder="https://community.secop.gov.co/..." autofocus />
+    <button id="btnDescargar" class="btn-primary">📥 Descargar Anexos</button>
+  </div>
+
+  <div id="status"></div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
