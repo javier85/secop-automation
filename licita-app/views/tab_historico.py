@@ -11,6 +11,7 @@ from database.cotizaciones_db import (
     eliminar_cotizacion_completa,
 )
 from services.excel_service import generar_excel_cotizacion
+from database.secop_db import cargar_licitaciones
 
 
 def render_tab_historico():
@@ -41,23 +42,18 @@ def render_tab_historico():
 
     cot_info = df_cot[df_cot["id"] == cot_id_sel].iloc[0]
 
-    # 2. Métricas Resumen
-    # 1. Cargar detalle de ítems con anticipación para calcular costos y utilidad
-    # 2. Métricas Resumen
+    # 2. Métricas Resumen Rediseñadas (Compactas)
     df_items = cargar_detalle_cotizacion(cot_id_sel)
 
     if not df_items.empty:
-        # Costo total acum
         costo_total_acum = (
             pd.to_numeric(df_items["costo_unitario"], errors="coerce").fillna(0.0)
             * pd.to_numeric(df_items["cantidad"], errors="coerce").fillna(0.0)
         ).sum()
 
-        # Recalcular Subtotal Venta usando el factor divisor (1 - margen/100)
         margen_serie = pd.to_numeric(df_items["margen_porcentaje"], errors="coerce").fillna(0.0)
         divisor_serie = (1.0 - (margen_serie / 100.0)).apply(lambda x: x if x > 0 else 1.0)
         p_venta_serie = pd.to_numeric(df_items["costo_unitario"], errors="coerce").fillna(0.0) / divisor_serie
-        
         subtotal_venta = (p_venta_serie * pd.to_numeric(df_items["cantidad"], errors="coerce").fillna(0.0)).sum()
     else:
         costo_total_acum = 0.0
@@ -65,57 +61,76 @@ def render_tab_historico():
 
     utilidad_bruta = subtotal_venta - costo_total_acum
     margen_global_pct = (utilidad_bruta / subtotal_venta * 100.0) if subtotal_venta > 0 else 0.0
-    
-    # 2. Métricas Resumen Expandidas
-    col_m1, col_m2, col_m3, col_m4, col_m5, col_m6 = st.columns(6)
 
-    with col_m1:
-        st.metric(
-            label="Proceso",
-            value=(
-                cot_info["numero_proceso"]
-                if pd.notna(cot_info["numero_proceso"]) and cot_info["numero_proceso"]
-                else "GENERAL"
-            ),
-        )
-    with col_m2:
-        st.metric(
-            label="Saldo Sin Margen",
-            value=f"${costo_total_acum:,.2f}",
-            help="Suma de los costos base de todos los ítems",
-        )
-    with col_m3:
-        st.metric(
-            label="Saldo Con Margen",
-            value=f"${subtotal_venta:,.2f}",
-            help="Subtotal de venta sin impuestos",
-        )
-    with col_m4:
-        st.metric(
-            label="Utilidad Bruta",
-            value=f"${utilidad_bruta:,.2f}",
-            delta=f"{margen_global_pct:.2f}% Margen",
-            help="Ganancia neta esperada en la cotización",
-        )
-    with col_m5:
-        st.metric(
-            label="IVA",
-            value=f"${cot_info['impuesto_iva']:,.2f}",
-        )
-    with col_m6:
-        st.metric(
-            label="Total Oferta",
-            value=f"${cot_info['total']:,.2f}",
-        )
+    # --- CÁLCULO Y CONSULTA DE PRESUPUESTO OFICIAL SECOP ---
+    presupuesto_oficial = 0.0
+    n_proc = cot_info["numero_proceso"] if pd.notna(cot_info["numero_proceso"]) and cot_info["numero_proceso"] else "GENERAL"
 
-    # -------------------------------------------------------------
-    # AGREGAR AQUÍ (Línea 97 aprox.)
-    # -------------------------------------------------------------
+    if n_proc != "GENERAL":
+        df_lics = cargar_licitaciones()
+        lic_match = df_lics[df_lics["numero_proceso"] == n_proc]
+        if not lic_match.empty and pd.notna(lic_match.iloc[0].get("presupuesto")):
+            presupuesto_oficial = float(lic_match.iloc[0]["presupuesto"])
+
+    total_oferta = float(cot_info['total'] or 0.0)
+    holgura_cop = presupuesto_oficial - total_oferta
+    pct_uso_presupuesto = (total_oferta / presupuesto_oficial * 100.0) if presupuesto_oficial > 0 else 0.0
+
+    # --- CONTENEDOR COMPACTO CON TÍTULOS CORTOS Y COMPARATIVA SECOP ---
+    with st.container(border=True):
+        st.markdown("##### 📈 Resumen Financiero y Comparativa SECOP")
+        
+        # Fila 1: Identificación, Costos y Venta
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("📋 Proceso", str(n_proc))
+        with col2:
+            if presupuesto_oficial > 0:
+                st.metric(
+                    "🏛️ Presupuesto Oficial", 
+                    f"${presupuesto_oficial:,.2f}", 
+                    delta=f"${holgura_cop:,.2f} Holgura ({100 - pct_uso_presupuesto:.1f}%)"
+                )
+            else:
+                st.metric("🏛️ Presupuesto Oficial", "N/A")
+        with col3:
+            st.metric("🚀 Total Oferta", f"${total_oferta:,.2f}")
+            
+
+        # Fila 2: Utilidad, IVA, Total y Presupuesto Oficial (4 columnas)
+        col4, col5, col6, col7 = st.columns(4)
+        with col4:
+            st.metric("📦 Costo Base", f"${costo_total_acum:,.2f}", help="Suma de costos sin margen")
+        with col5:
+            st.metric("🏛️ IVA Estimado", f"${cot_info['impuesto_iva']:,.2f}")
+        with col6:
+            st.metric("🏷️ Subtotal Venta", f"${subtotal_venta:,.2f}", help="Valor de venta sin impuestos")
+        with col7:
+            st.metric(
+                "💰 Utilidad Bruta",
+                f"${utilidad_bruta:,.2f}",
+                delta=f"{margen_global_pct:.2f}% Margen Real",
+                help="Calculado sobre el valor de venta"
+            )
+            
+    # --- BANNER VISUAL ECUACIÓN DE MARGEN (LECTURA INSTANTÁNEA) ---
     if subtotal_venta > 0:
-        st.info(
-            f"💡 **Cálculo de Margen Aplicado:** Esta cotización tiene un costo base de **${costo_total_acum:,.2f}**"
-            f"Un precio de venta de **${subtotal_venta:,.2f}**"
-            f"Generando una utilidad neta de **${utilidad_bruta:,.2f}** ({margen_global_pct:.2f}% sobre venta)."
+        pct_costo = (costo_total_acum / subtotal_venta * 100.0) if subtotal_venta > 0 else 0.0
+        
+        st.markdown(
+            f"""
+            <div style="background-color: #1e293b; border-left: 4px solid #3b82f6; padding: 10px 14px; border-radius: 6px; margin-top: 8px; font-size: 0.9em; color: #e2e8f0;">
+                <span style="font-weight: 600; color: #60a5fa;">💡 Ecuación del Margen (sobre Venta):</span><br>
+                <div style="margin-top: 6px; display: flex; flex-wrap: wrap; gap: 12px; align-items: center; font-size: 1.05em;">
+                    <span><b>Costo Base:</b> ${costo_total_acum:,.2f} <small style="color:#94a3b8;">({pct_costo:.1f}%)</small></span>
+                    <span style="color:#94a3b8; font-weight:bold;">+</span>
+                    <span style="color:#4ade80;"><b>Utilidad:</b> ${utilidad_bruta:,.2f} <small>({margen_global_pct:.1f}%)</small></span>
+                    <span style="color:#94a3b8; font-weight:bold;">=</span>
+                    <span style="color:#38bdf8;"><b>Subtotal Venta:</b> ${subtotal_venta:,.2f} <small>(100%)</small></span>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True
         )
 
     st.markdown("---")
