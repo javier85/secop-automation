@@ -1,46 +1,50 @@
-# views/tab_ingesta_manual.py
-from datetime import datetime
-from pathlib import Path
 import sys
+from pathlib import Path
 import streamlit as st
 
-# 1. Asegurar la raíz del proyecto en sys.path
+# Asegurar la raíz del proyecto en sys.path
 ROOT_DIR = Path(__file__).resolve().parent.parent
 if str(ROOT_DIR) not in sys.path:
     sys.path.append(str(ROOT_DIR))
 
-# 2. Importación corregida de la base de datos (secop_db en lugar de connection)
-from database.secop_db import guardar_licitacion_secop
+from database.secop_db import calcular_semaforo, guardar_licitacion_secop
 from services.ai_service import (
     extraer_licitacion_con_ollama,
     verificar_conexion_ollama,
 )
-from utils.helpers import calcular_semaforo, crear_carpeta_licitacion
+from services.filesystem_service import crear_carpeta_licitacion
 
 
 def render_tab_ingesta_manual():
     st.subheader("📋 Ingesta Manual Asistida por IA (SECOP II)")
     st.markdown(
-        "Pega el enlace del proceso y el contenido copiado de la pantalla para procesarlo"
-        " e ingresarlo automáticamente a PostgreSQL sin bloqueos por CAPTCHA."
+        "Pega el enlace del proceso y el contenido copiado de la pantalla para"
+        " procesarlo e ingresarlo automáticamente a PostgreSQL sin bloqueos por"
+        " CAPTCHA."
     )
 
     ollama_activo = verificar_conexion_ollama()
     if not ollama_activo:
         st.error(
-            "🔴 Servicio de Ollama desconectado. Inicie Ollama para habilitar el parsing."
+            "🔴 Servicio de Ollama desconectado. Inicie Ollama para habilitar"
+            " el parsing."
         )
 
     with st.form("form_ingesta_manual"):
         enlace_secop = st.text_input(
             "Enlace del Proceso SECOP II *",
-            placeholder="https://community.secop.gov.co/Public/Tendering/OpportunityDetail/Index?noticeUID=...",
+            placeholder=(
+                "https://community.secop.gov.co/Public/Tendering/OpportunityDetail/Index?noticeUID=..."
+            ),
         )
 
         raw_content = st.text_area(
             "Contenido Copiado del Portal SECOP II *",
             height=220,
-            placeholder="Pega aquí todo el texto copiado directamente desde la página del proceso...",
+            placeholder=(
+                "Pega aquí todo el texto copiado directamente desde la página"
+                " del proceso..."
+            ),
         )
 
         modelo_llm = st.selectbox(
@@ -62,7 +66,7 @@ def render_tab_ingesta_manual():
             st.warning("Debe ingresar tanto la URL como el contenido copiado.")
             return
 
-        with st.spinner("Analizando datos y creando carpetas físicas..."):
+        with st.spinner("Analizando datos con LLM y creando carpetas físicas..."):
             datos = extraer_licitacion_con_ollama(
                 raw_content, model=modelo_llm
             )
@@ -74,15 +78,16 @@ def render_tab_ingesta_manual():
             plazo = datos.get("plazo_presentacion", "")
             obs = datos.get("observaciones", "")
 
-            semaforo_val = calcular_semaforo(plazo)
+            # Creación de estructura de directorios unificada
             carpeta_val = crear_carpeta_licitacion(num_proceso)
+            semaforo_val = calcular_semaforo(plazo)
 
             guardar_licitacion_secop(
                 numero_proceso=num_proceso,
                 entidad=entidad,
                 objeto=objeto,
                 presupuesto=presupuesto,
-                plazo_presentacion=plazo,  # Solo se persiste la fecha/hora absoluta
+                plazo_presentacion=plazo,
                 estado="EN EVALUACIÓN",
                 carpeta=carpeta_val,
                 enlace_secop=enlace_secop.strip(),
@@ -90,7 +95,8 @@ def render_tab_ingesta_manual():
             )
 
             st.success(
-                f"✅ Licitación **{num_proceso}** guardada correctamente en la base de datos."
+                f"✅ Licitación **{num_proceso}** guardada correctamente en la"
+                " base de datos."
             )
             st.json(
                 {

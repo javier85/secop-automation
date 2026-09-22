@@ -1,32 +1,31 @@
-# database/secop_db.py
 import os
-import re
 import platform
+import re
 import subprocess
 import pandas as pd
 import streamlit as st
-from sqlalchemy import text
-from database.connection import get_engine
-from datetime import datetime
+import pypdf
+import psycopg2
+
 from pathlib import Path
+from sqlalchemy import text
+from datetime import datetime
 from config import BASE_SECOP_DIR
+from database.connection import get_engine
 
 def normalizar_y_calcular_semaforo(fecha_limite_str: str):
     """1. Convierte fechas con AM/PM o de 12 horas a formato limpio 24 Horas (DD/MM/YYYY HH:MM:SS).
-
     2. Calcula el estado del semáforo antes de guardar en la base de datos.
     Devuelve (plazo_24h, semaforo_calculado).
     """
     if not fecha_limite_str or not isinstance(fecha_limite_str, str):
-        return str(fecha_limite_str), "Sin fecha"
+        return str(fecha_limite_str or ""), "Sin fecha"
 
     txt = fecha_limite_str.strip().upper()
 
-    # Detectar presencia de AM / PM
     es_pm = "PM" in txt or "P.M." in txt
     es_am = "AM" in txt or "A.M." in txt
 
-    # Remover sufijos AM / PM
     txt_limpio = re.sub(
         r"\s*(AM|PM|A\.M\.|P\.M\.)", "", txt, flags=re.IGNORECASE
     ).strip()
@@ -49,19 +48,15 @@ def normalizar_y_calcular_semaforo(fecha_limite_str: str):
             continue
 
     if not dt:
-        # Si no fue posible parsear la fecha, se retorna el valor original
         return fecha_limite_str, fecha_limite_str
 
-    # Ajuste de horas si venía con sintaxis de 12 horas (AM/PM)
     if es_pm and dt.hour < 12:
         dt = dt.replace(hour=dt.hour + 12)
     elif es_am and dt.hour == 12:
         dt = dt.replace(hour=0)
 
-    # 1. Plazo convertido a formato 24 Horas
     plazo_24h = dt.strftime("%d/%m/%Y %H:%M:%S")
 
-    # 2. Cálculo dinámico del semáforo (Fórmula equivalente a Excel)
     ahora = datetime.now()
     diferencia = dt - ahora
     segundos_totales = abs(int(diferencia.total_seconds()))
@@ -76,9 +71,9 @@ def normalizar_y_calcular_semaforo(fecha_limite_str: str):
 
     return plazo_24h, semaforo
 
+
 def calcular_semaforo(fecha_limite) -> str:
     """Calcula el estado del semáforo replicando la fórmula de Excel.
-
     Soporta formatos de 12 horas (AM/PM) y 24 horas.
     """
     if not fecha_limite:
@@ -87,10 +82,10 @@ def calcular_semaforo(fecha_limite) -> str:
     if isinstance(fecha_limite, str):
         fecha_clean = fecha_limite.strip()
         formatos = (
-            "%d/%m/%Y %I:%M:%S %p",  # 25/08/2026 10:00:00 AM
-            "%d/%m/%Y %I:%M %p",  # 25/08/2026 10:00 AM
-            "%d/%m/%Y %H:%M:%S",  # 25/08/2026 10:00:00
-            "%d/%m/%Y %H:%M",  # 25/08/2026 10:00
+            "%d/%m/%Y %I:%M:%S %p",
+            "%d/%m/%Y %I:%M %p",
+            "%d/%m/%Y %H:%M:%S",
+            "%d/%m/%Y %H:%M",
             "%Y-%m-%d %I:%M:%S %p",
             "%Y-%m-%d %I:%M %p",
             "%Y-%m-%d %H:%M:%S",
@@ -120,6 +115,7 @@ def calcular_semaforo(fecha_limite) -> str:
     else:
         return f"{dias} días {horas} h"
 
+
 def obtener_datos_ejemplo() -> pd.DataFrame:
     """Devuelve un registro de respaldo en caso de que la tabla esté vacía o falle la conexión."""
     return pd.DataFrame([
@@ -127,7 +123,10 @@ def obtener_datos_ejemplo() -> pd.DataFrame:
             "id": 1,
             "numero_proceso": "PMM-MC-009-2026",
             "entidad": "Personería Municipal de Manizales",
-            "objeto": "Prestar el servicio de revisión, mantenimiento y recarga de extintores...",
+            "objeto": (
+                "Prestar el servicio de revisión, mantenimiento y recarga de"
+                " extintores..."
+            ),
             "presupuesto": 4296365.0,
             "plazo_presentacion": "20/08/2026 18:00:00",
             "semaforo": "Vencido (7 días 0 h)",
@@ -138,11 +137,14 @@ def obtener_datos_ejemplo() -> pd.DataFrame:
         }
     ])
 
+
+@st.cache_data(ttl=60)
 def cargar_licitaciones() -> pd.DataFrame:
     """Obtiene el listado completo de licitaciones SECOP registradas en la base de datos."""
     query = """
         SELECT id, numero_proceso, entidad, objeto, presupuesto, 
-               plazo_presentacion, semaforo, estado, carpeta, enlace_secop, observaciones 
+               plazo_presentacion, semaforo, estado, carpeta, enlace_secop, 
+               observaciones, dictamen_ia, fecha_auditoria 
         FROM licitaciones_secop 
         ORDER BY id DESC;
     """
@@ -152,6 +154,7 @@ def cargar_licitaciones() -> pd.DataFrame:
             return df if not df.empty else obtener_datos_ejemplo()
     except Exception:
         return obtener_datos_ejemplo()
+
 
 def guardar_licitacion_secop(
     numero_proceso: str,
@@ -165,13 +168,15 @@ def guardar_licitacion_secop(
     observaciones: str,
     id=None,
 ):
-    # Conversión defensiva a tipos nativos de Python para evitar incompatibilidades de psycopg2
+    """Inserta o actualiza una licitación procesando la estructura de archivos y semáforos."""
     lic_id = int(id) if id is not None and not pd.isna(id) else None
-    pres_val = float(presupuesto) if presupuesto is not None and not pd.isna(presupuesto) else 0.0
+    pres_val = (
+        float(presupuesto)
+        if presupuesto is not None and not pd.isna(presupuesto)
+        else 0.0
+    )
 
-    plazo_clean = str(plazo_presentacion)[:250] if plazo_presentacion else ""
     entidad_clean = str(entidad)[:250] if entidad else ""
-    
     plazo_24h, semaforo_calculado = normalizar_y_calcular_semaforo(
         plazo_presentacion
     )
@@ -205,7 +210,7 @@ def guardar_licitacion_secop(
                 objeto = :obj, 
                 presupuesto = :pres, 
                 plazo_presentacion = :plazo, 
-                semaforo = :sem,
+                semaforo = :sem, 
                 estado = :est, 
                 carpeta = :car, 
                 enlace_secop = :link, 
@@ -240,6 +245,9 @@ def guardar_licitacion_secop(
     with get_engine().begin() as conn:
         conn.execute(text(query), params)
 
+    cargar_licitaciones.clear()
+
+
 def eliminar_licitacion_secop(licitacion_id: int):
     """Elimina permanentemente un proceso SECOP por su ID."""
     with get_engine().begin() as conn:
@@ -247,5 +255,36 @@ def eliminar_licitacion_secop(licitacion_id: int):
             text("DELETE FROM licitaciones_secop WHERE id = :id;"),
             {"id": licitacion_id},
         )
-    # Alias de compatibilidad
+    cargar_licitaciones.clear()
+
+
+# Alias de compatibilidad
 obtener_licitaciones = cargar_licitaciones
+
+
+def registrar_auditoria_ia(numero_proceso: str, dictamen_completo: str = "", **kwargs):
+    """Guarda el dictamen completo de Ollama y actualiza el estado en PostgreSQL."""
+    # Resuelve el contenido sin importar si usas dictamen_completo, resumen_dictamen o dictamen_ia
+    informe_final = (
+        dictamen_completo
+        or kwargs.get("resumen_dictamen")
+        or kwargs.get("dictamen_ia")
+        or ""
+    )
+
+    query = """
+        UPDATE licitaciones_secop 
+        SET estado = 'AUDITADO POR IA',
+            dictamen_ia = :dictamen,
+            fecha_auditoria = CURRENT_TIMESTAMP
+        WHERE numero_proceso = :num;
+    """
+    with get_engine().begin() as conn:
+        conn.execute(
+            text(query), 
+            {
+                "dictamen": informe_final, 
+                "num": numero_proceso
+            }
+        )
+    cargar_licitaciones.clear()  # Invalida la caché de Streamlit

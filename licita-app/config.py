@@ -63,7 +63,7 @@ OLLAMA_BASE_URL = get_config(
     "OLLAMA_BASE_URL", "http://ollama:11434", section="ai"
 )
 DEFAULT_LLM_MODEL = get_config("DEFAULT_LLM_MODEL", "llama3.2", section="ai")
-OLLAMA_TIMEOUT = int(get_config("OLLAMA_TIMEOUT", "60", section="ai"))
+OLLAMA_TIMEOUT = int(get_config("OLLAMA_TIMEOUT", "600", section="ai"))
 
 # --- INTEGRACIONES WEBHOOKS (n8n) ---
 N8N_WEBHOOK_SECOP_SYNC = get_config(

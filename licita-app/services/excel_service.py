@@ -1,12 +1,18 @@
 # services/excel_service.py
+from typing import Union
 import io
 import pandas as pd
 
 
 def generar_excel_cotizacion(
-    cotizacion_info: dict, df_items: pd.DataFrame
+    cotizacion_info: dict, df_items: Union[pd.DataFrame, list]
 ) -> bytes:
     """Genera un archivo Excel con hojas separadas para el encabezado y el detalle de ítems."""
+
+    # Convertir a DataFrame si se pasa una lista de diccionarios
+    if isinstance(df_items, list):
+        df_items = pd.DataFrame(df_items)
+
     output = io.BytesIO()
 
     with pd.ExcelWriter(output, engine="openpyxl") as writer:

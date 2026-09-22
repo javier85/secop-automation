@@ -1,6 +1,6 @@
-import io
 import pandas as pd
 import streamlit as st
+
 from database.cotizaciones_db import (
     convertir_df_a_excel,
     guardar_items_masivos_db,
@@ -12,15 +12,6 @@ from services.ai_service import (
     verificar_conexion_ollama,
 )
 from services.excel_service import leer_excel_items
-
-
-def _convertir_df_a_excel(df: pd.DataFrame) -> bytes:
-    """Genera un archivo Excel en memoria a partir del resultado de la homologación."""
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        df.to_excel(writer, sheet_name="Homologacion_IA", index=False)
-    output.seek(0)
-    return output.getvalue()
 
 
 def render_tab_homologador():
@@ -39,8 +30,8 @@ def render_tab_homologador():
             st.success("🟢 Servicio de Ollama activo y respondiendo.")
         else:
             st.error(
-                "🔴 No se pudo conectar con Ollama. Verifica que el servicio esté"
-                " activo en http://localhost:11434."
+                "🔴 No se pudo conectar con Ollama. Verifica que el servicio"
+                " esté activo en http://localhost:11434."
             )
 
     with col_model:
@@ -71,7 +62,8 @@ def render_tab_homologador():
         st.warning("⚠️ El catálogo histórico está vacío en el estado actual.")
     else:
         st.success(
-            f"✅ Catálogo activo con **{len(catalogo)}** ítems listos para la IA."
+            f"✅ Catálogo activo con **{len(catalogo)}** ítems listos para la"
+            " IA."
         )
 
     # 3. Consulta Unitaria
@@ -79,7 +71,9 @@ def render_tab_homologador():
         st.markdown("#### Test de Coincidencia Unitaria")
         desc_test = st.text_input(
             "Descripción del Insumo a Requerir",
-            placeholder="Ej: Mantenimiento y recarga de extintor Solkaflam 3700g",
+            placeholder=(
+                "Ej: Mantenimiento y recarga de extintor Solkaflam 3700g"
+            ),
         )
 
         if st.button(
@@ -100,7 +94,8 @@ def render_tab_homologador():
                 )
             with c2:
                 st.metric(
-                    "Unidad Sugerida", resultado.get("unidad_medida", "UNIDAD")
+                    "Unidad Sugerida",
+                    resultado.get("unidad_medida", "UNIDAD"),
                 )
             with c3:
                 st.metric(
@@ -109,8 +104,9 @@ def render_tab_homologador():
                 )
 
             st.info(
-                f"**Ítem Sugerido:** {resultado.get('item_sugerido') or 'Sin coincidencia clara'}\n\n"
-                f"**Justificación Técnica:** {resultado.get('justificacion', 'N/A')}"
+                "**Ítem Sugerido:**"
+                f" {resultado.get('item_sugerido') or 'Sin coincidencia clara'}\n\n**Justificación"
+                f" Técnica:** {resultado.get('justificacion', 'N/A')}"
             )
 
     # 4. Homologación Masiva mediante Excel/CSV
@@ -126,7 +122,8 @@ def render_tab_homologador():
             try:
                 df_req = leer_excel_items(uploaded_file)
                 st.write(
-                    f"📋 Se cargaron **{len(df_req)}** ítems para homologación."
+                    f"📋 Se cargaron **{len(df_req)}** ítems para"
+                    " homologación."
                 )
                 st.dataframe(df_req.head(5), use_container_width=True)
 
@@ -153,8 +150,8 @@ def render_tab_homologador():
                         use_container_width=True,
                         hide_index=True,
                         column_config={
-                            "Costo Sugerido (COP)": st.column_config.NumberColumn(
-                                format="$ %,.2f"
+                            "Costo Sugerido (COP)": (
+                                st.column_config.NumberColumn(format="$ %,.2f")
                             ),
                             "Confianza (%)": st.column_config.NumberColumn(
                                 format="%d %%"
@@ -167,9 +164,11 @@ def render_tab_homologador():
                     with col_descarga:
                         st.download_button(
                             label="📥 Descargar Resultado en Excel",
-                            data=_convertir_df_a_excel(df_res),
+                            data=convertir_df_a_excel(df_res),
                             file_name="homologacion_resultado.xlsx",
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            mime=(
+                                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                            ),
                             use_container_width=True,
                         )
 

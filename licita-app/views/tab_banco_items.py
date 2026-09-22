@@ -1,40 +1,18 @@
-# views/tab_banco_items.py
-import io
 import pandas as pd
 import streamlit as st
-from sqlalchemy import text
+
 from database.cotizaciones_db import (
-    buscar_items_globales,
-    guardar_cambios_bd, 
-    obtener_banco_items, 
     convertir_df_a_excel,
+    guardar_cambios_bd,
+    obtener_banco_items,
 )
-from database.connection import get_engine
 
-# ==========================================
-# HELPER: FORMATO PESOS COLOMBIANOS (COP)
-# ==========================================
-def formato_cop(valor: float) -> str:
-    """Formatea un número flotante a moneda COP: $ 46.750,04"""
-    if valor is None or pd.isna(valor):
-        return "$ 0,00"
-    # Formatear estándar y reemplazar coma por punto de miles y punto por coma decimal
-    return f"$ {valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-
-# ==========================================
-# HELPER: EXPORTAR A EXCEL
-# ==========================================
-def _convertir_df_a_excel(df: pd.DataFrame) -> bytes:
-    """Convierte un DataFrame a archivo Excel binario en memoria."""
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        df.to_excel(writer, index=False, sheet_name="Banco_Items")
-    return output.getvalue()
 
 def render_tab_banco_items():
     st.subheader("🔍 Banco de Ítems e Insumos Históricos")
     st.markdown(
-        "Explora y edita el histórico de precios y costos unitarios de los artículos cotizados."
+        "Explora y edita el histórico de precios y costos unitarios de los"
+        " artículos cotizados."
     )
 
     # 1. Filtros y Búsqueda
@@ -58,7 +36,8 @@ def render_tab_banco_items():
 
     if df_items.empty:
         st.warning(
-            "⚠️ No se encontraron ítems que coincidan con el criterio de búsqueda."
+            "⚠️ No se encontraron ítems que coincidan con el criterio de"
+            " búsqueda."
         )
         return
 
@@ -85,10 +64,10 @@ def render_tab_banco_items():
                 "Cantidad", format="%d", min_value=1
             ),
             "Valor Unitario": st.column_config.NumberColumn(
-                "Valor Unitario", format="$ %.2f", min_value=0.0
+                "Valor Unitario", format="$ %,.2f", min_value=0.0
             ),
             "Valor Total": st.column_config.NumberColumn(
-                "Valor Total", format="$ %.2f", disabled=True
+                "Valor Total", format="$ %,.2f", disabled=True
             ),
             "Enlace / Proveedor": st.column_config.LinkColumn(
                 "Enlace / Proveedor",
@@ -111,7 +90,9 @@ def render_tab_banco_items():
         if st.button(
             "💾 Guardar Cambios en Base de Datos",
             type="primary",
-            disabled=not (cambios.get("edited_rows") or cambios.get("deleted_rows")),
+            disabled=not (
+                cambios.get("edited_rows") or cambios.get("deleted_rows")
+            ),
             use_container_width=True,
         ):
             guardar_cambios_bd(df_items, cambios)
@@ -124,6 +105,8 @@ def render_tab_banco_items():
             label="📥 Exportar Búsqueda a Excel",
             data=convertir_df_a_excel(edited_df),
             file_name="banco_items_historico.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            mime=(
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            ),
             use_container_width=True,
         )

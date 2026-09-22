@@ -6,15 +6,6 @@ from sqlalchemy import text
 from datetime import datetime
 from database.connection import get_db_connection, get_engine
 
-# ==========================================
-# HELPER: EXPORTAR A EXCEL
-# ==========================================
-def _convertir_df_a_excel(df: pd.DataFrame) -> bytes:
-    """Convierte un DataFrame a archivo Excel binario en memoria."""
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        df.to_excel(writer, index=False, sheet_name="Banco_Items")
-    return output.getvalue()
 
 def cargar_catalogo_completo() -> pd.DataFrame:
     """Carga todos los campos de la tabla banco_items_historico para la IA y la vista."""
@@ -81,6 +72,7 @@ def obtener_banco_items(busqueda: str = "") -> pd.DataFrame:
     except Exception as e:
         st.error(f"Error al consultar el Banco de Ítems: {e}")
         return pd.DataFrame()
+    
 def guardar_cambios_bd(df_original: pd.DataFrame, cambios: dict):
     """Aplica las modificaciones directamente en la base de datos PostgreSQL."""
     engine = get_engine()
@@ -90,170 +82,51 @@ def guardar_cambios_bd(df_original: pd.DataFrame, cambios: dict):
     if edited_rows:
         query_update = text("""
             UPDATE public.banco_items_historico
-            SET 
-                descripcion = :descripcion,
-                unidad_medida = :unidad,
-                cantidad = :cantidad,
-                costo_unitario = :costo_unitario,
-                enlace = :enlace
+            SET descripcion = :descripcion, unidad_medida = :unidad,
+                cantidad = :cantidad, costo_unitario = :costo_unitario, enlace = :enlace
             WHERE id = :id;
         """)
 
         with engine.begin() as conn:
             for idx, col_changes in edited_rows.items():
                 row_id = int(df_original.iloc[idx]["ID"])
+                conn.execute(query_update, {
+                    "id": row_id,
+                    "descripcion": col_changes.get("Descripción", df_original.iloc[idx]["Descripción"]),
+                    "unidad": col_changes.get("Unidad", df_original.iloc[idx]["Unidad"]),
+                    "cantidad": int(col_changes.get("Cantidad", df_original.iloc[idx]["Cantidad"]) or 0),
+                    "costo_unitario": float(col_changes.get("Valor Unitario", df_original.iloc[idx]["Valor Unitario"]) or 0.0),
+                    "enlace": col_changes.get("Enlace / Proveedor", df_original.iloc[idx]["Enlace / Proveedor"]),
+                })
 
-                descripcion = col_changes.get(
-                    "Descripción", df_original.iloc[idx]["Descripción"]
-                )
-                unidad = col_changes.get(
-                    "Unidad", df_original.iloc[idx]["Unidad"]
-                )
-                cantidad = int(
-                    col_changes.get(
-                        "Cantidad", df_original.iloc[idx]["Cantidad"]
-                    )
-                )
-                costo = float(
-                    col_changes.get(
-                        "Valor Unitario", df_original.iloc[idx]["Valor Unitario"]
-                    )
-                )
-                enlace = col_changes.get(
-                    "Enlace / Proveedor",
-                    df_original.iloc[idx]["Enlace / Proveedor"],
-                )
+    # 2. Filas nuevas agregadas dinámicamente
+    added_rows = cambios.get("added_rows", [])
+    if added_rows:
+        query_insert = text("""
+            INSERT INTO public.banco_items_historico (
+                numero_proceso, descripcion, unidad_medida, cantidad, costo_unitario, enlace
+            ) VALUES (:numero_proceso, :descripcion, :unidad, :cantidad, :costo_unitario, :enlace);
+        """)
+        with engine.begin() as conn:
+            for new_row in added_rows:
+                conn.execute(query_insert, {
+                    "numero_proceso": new_row.get("Número del Proceso", "S/N"),
+                    "descripcion": new_row.get("Descripción", ""),
+                    "unidad": new_row.get("Unidad", "UNIDAD"),
+                    "cantidad": int(new_row.get("Cantidad", 1) or 1),
+                    "costo_unitario": float(new_row.get("Valor Unitario", 0.0) or 0.0),
+                    "enlace": new_row.get("Enlace / Proveedor", ""),
+                })
 
-                conn.execute(
-                    query_update,
-                    {
-                        "id": row_id,
-                        "descripcion": descripcion,
-                        "unidad": unidad,
-                        "cantidad": cantidad,
-                        "costo_unitario": costo,
-                        "enlace": enlace,
-                    },
-                )
-
-    # 2. Filas eliminadas
+    # 3. Filas eliminadas
     deleted_rows = cambios.get("deleted_rows", [])
     if deleted_rows:
-        query_delete = text(
-            "DELETE FROM public.banco_items_historico WHERE id = :id;"
-        )
+        query_delete = text("DELETE FROM public.banco_items_historico WHERE id = :id;")
         with engine.begin() as conn:
             for idx in deleted_rows:
-                row_id = int(df_original.iloc[idx]["ID"])
-                conn.execute(query_delete, {"id": row_id})
+                conn.execute(query_delete, {"id": int(df_original.iloc[idx]["ID"])})
 
-# ==========================================
-# 2. INTERFAZ DE USUARIO
-# ==========================================
-def render_tab_banco_items():
-    st.subheader("🔍 Banco de Ítems e Insumos Históricos")
-    st.markdown(
-        "Explora y edita el histórico de precios y costos unitarios de los artículos cotizados."
-    )
 
-    # 1. Filtros y Búsqueda
-    col_search, col_clean = st.columns([4, 1])
-    with col_search:
-        query = st.text_input(
-            "🔎 Buscar por descripción o palabra clave",
-            placeholder="Ej: Extintor, Guantes, Arnés...",
-            key="search_banco_items",
-        )
-    with col_clean:
-        st.markdown(
-            "<div style='margin-top: 28px;'></div>", unsafe_allow_html=True
-        )
-        if st.button("🔄 Refrescar", use_container_width=True):
-            st.cache_data.clear()
-            st.rerun()
-
-    df_items = obtener_banco_items(busqueda=query)
-
-    if df_items.empty:
-        st.warning(
-            "⚠️ No se encontraron ítems que coincidan con el criterio de búsqueda."
-        )
-        return
-
-    st.caption(f"Total de artículos encontrados: **{len(df_items)}**")
-
-    # 2. Data Editor (Edición directa, Enlace clickeable)
-    edited_df = st.data_editor(
-        df_items,
-        use_container_width=True,
-        hide_index=True,
-        num_rows="dynamic",
-        key="editor_banco_items",
-        disabled=[
-            "ID",
-            "Número del Proceso",
-            "Valor Total",
-            "Fecha Registro",
-        ],
-        column_config={
-            "ID": st.column_config.NumberColumn("ID", disabled=True),
-            "Número del Proceso": st.column_config.TextColumn(
-                "Proceso / Licitación", disabled=True, width="medium"
-            ),
-            "Descripción": st.column_config.TextColumn(
-                "Descripción", width="large"
-            ),
-            "Unidad": st.column_config.TextColumn("Unidad", width="small"),
-            "Cantidad": st.column_config.NumberColumn(
-                "Cantidad", format="%d", min_value=1
-            ),
-            "Valor Unitario": st.column_config.NumberColumn(
-                "Valor Unitario", format="$ %.2f", min_value=0.0
-            ),
-            "Valor Total": st.column_config.NumberColumn(
-                "Valor Total", format="$ %.2f", disabled=True
-            ),
-            "Enlace / Proveedor": st.column_config.LinkColumn(
-                "Enlace / Proveedor",
-                display_text="Ver Enlace / Proveedor",
-                width="medium",
-            ),
-            "Fecha Registro": st.column_config.DatetimeColumn(
-                "Fecha", format="DD/MM/YYYY", disabled=True
-            ),
-        },
-    )
-
-    # 3. Acciones
-    cambios_pendientes = st.session_state.get("editor_banco_items", {})
-    tiene_cambios = bool(
-        cambios_pendientes.get("edited_rows")
-        or cambios_pendientes.get("deleted_rows")
-    )
-
-    st.markdown("---")
-    col_btn1, col_btn2 = st.columns(2)
-
-    with col_btn1:
-        if st.button(
-            "💾 Guardar Cambios en Base de Datos",
-            type="primary",
-            disabled=not tiene_cambios,
-            use_container_width=True,
-        ):
-            guardar_cambios_bd(df_items, cambios_pendientes)
-            st.cache_data.clear()
-            st.success("✅ Cambios actualizados correctamente en PostgreSQL.")
-            st.rerun()
-
-    with col_btn2:
-        st.download_button(
-            label="📥 Exportar Búsqueda a Excel",
-            data=_convertir_df_a_excel(edited_df),
-            file_name="banco_items_historico.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True,
-        )
         
 def generar_numero_cotizacion() -> str:
     """Genera un consecutivo automático en formato COT-AAAA-XXX."""
@@ -318,9 +191,9 @@ def guardar_cotizacion(
         INSERT INTO cotizacion_items (
             cotizacion_id, numero_item, descripcion, cantidad,
             unidad_medida, costo_unitario, margen_porcentaje,
-            precio_venta_unitario, subtotal_item
+            precio_venta_unitario, subtotal_item, enlace_referencia
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s);
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s);
     """
 
     try:
@@ -356,6 +229,7 @@ def guardar_cotizacion(
                             it.get("margen_porcentaje", 20.0),
                             it.get("precio_venta_unitario", 0.0),
                             it.get("subtotal_item", 0.0),
+                            it.get("enlace_referencia", ""), # Campo nuevo
                         ),
                     )
             conn.commit()
@@ -386,11 +260,11 @@ def cargar_items_historicos() -> pd.DataFrame:
 
 
 def buscar_items_globales(query_texto: str = "") -> pd.DataFrame:
-    """Busca ítems en el histórico por descripción o término clave."""
     sql = """
         SELECT ci.id, ci.descripcion, ci.cantidad, ci.unidad_medida,
                ci.costo_unitario, ci.margen_porcentaje, ci.precio_venta_unitario,
-               ci.subtotal_item, c.numero_cotizacion, c.numero_proceso, c.fecha_emision
+               ci.subtotal_item, ci.enlace_referencia, c.numero_cotizacion, 
+               c.numero_proceso, c.fecha_emision
         FROM cotizacion_items ci
         JOIN cotizaciones c ON ci.cotizacion_id = c.id
     """
@@ -420,20 +294,29 @@ def actualizar_estado_cotizacion(cotizacion_id: int, estado: str) -> bool:
     except Exception:
         return False
 
-
 def actualizar_encabezado_cotizacion(
-    cotizacion_id: int, estado: str = None, observaciones: str = None
+    cotizacion_id: int,
+    tipo_cotizacion: str = None,
+    numero_proceso: str = None,
+    observaciones: str = None,
+    estado: str = None,
 ) -> bool:
-    """Actualiza el estado y/u observaciones de una cotización desde el histórico."""
+    """Actualiza el tipo, número de proceso, observaciones y/o estado de una cotización."""
     fields = []
     params = []
 
-    if estado is not None:
-        fields.append("estado = %s")
-        params.append(estado)
+    if tipo_cotizacion is not None:
+        fields.append("tipo_cotizacion = %s")
+        params.append(tipo_cotizacion)
+    if numero_proceso is not None:
+        fields.append("numero_proceso = %s")
+        params.append(numero_proceso if numero_proceso.strip() else None)
     if observaciones is not None:
         fields.append("observaciones = %s")
         params.append(observaciones)
+    if estado is not None:
+        fields.append("estado = %s")
+        params.append(estado)
 
     if not fields:
         return True
@@ -447,9 +330,65 @@ def actualizar_encabezado_cotizacion(
                 cur.execute(sql, tuple(params))
             conn.commit()
         return True
-    except Exception:
+    except Exception as e:
+        st.error(f"Error actualizando el encabezado: {e}")
         return False
 
+def agregar_item_a_cotizacion_existente(cotizacion_id: int, item: dict) -> bool:
+    """Añade un nuevo ítem a una cotización registrada y recomputa subtotal, IVA y total."""
+    sql_max_item = "SELECT COALESCE(MAX(numero_item), 0) + 1 FROM cotizacion_items WHERE cotizacion_id = %s;"
+    sql_insert_item = """
+        INSERT INTO cotizacion_items (
+            cotizacion_id, numero_item, descripcion, cantidad,
+            unidad_medida, costo_unitario, margen_porcentaje,
+            precio_venta_unitario, subtotal_item, enlace_referencia
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s);
+    """
+    sql_recalcular = """
+        WITH totales AS (
+            SELECT 
+                COALESCE(SUM(subtotal_item), 0) AS nuevo_subtotal,
+                porcentaje_iva
+            FROM cotizaciones c
+            LEFT JOIN cotizacion_items ci ON c.id = ci.cotizacion_id
+            WHERE c.id = %s
+            GROUP BY c.id, c.porcentaje_iva
+        )
+        UPDATE cotizaciones
+        SET 
+            subtotal = totales.nuevo_subtotal,
+            impuesto_iva = totales.nuevo_subtotal * (COALESCE(totales.porcentaje_iva, 0.0) / 100.0),
+            total = totales.nuevo_subtotal * (1 + (COALESCE(totales.porcentaje_iva, 0.0) / 100.0))
+        FROM totales
+        WHERE cotizaciones.id = %s;
+    """
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql_max_item, (cotizacion_id,))
+                num_item = cur.fetchone()[0]
+
+                cur.execute(
+                    sql_insert_item,
+                    (
+                        cotizacion_id,
+                        num_item,
+                        item["descripcion"],
+                        item["cantidad"],
+                        item.get("unidad_medida", "UNIDAD"),
+                        item.get("costo_unitario", 0.0),
+                        item.get("margen_porcentaje", 20.0),
+                        item.get("precio_venta_unitario", 0.0),
+                        item.get("subtotal_item", 0.0),
+                        item.get("enlace_referencia", ""),
+                    ),
+                )
+                cur.execute(sql_recalcular, (cotizacion_id, cotizacion_id))
+            conn.commit()
+        return True
+    except Exception as e:
+        st.error(f"Error al añadir ítem: {e}")
+        return False
 
 def eliminar_cotizacion(cotizacion_id: int) -> bool:
     """Elimina una cotización y sus ítems asociados."""
@@ -465,10 +404,10 @@ def eliminar_cotizacion(cotizacion_id: int) -> bool:
 
 
 def cargar_items_por_cotizacion(cotizacion_id: int) -> pd.DataFrame:
-    """Obtiene los ítems pertenecientes a una cotización específica."""
     sql = """
         SELECT id, numero_item, descripcion, cantidad, unidad_medida,
-               costo_unitario, margen_porcentaje, precio_venta_unitario, subtotal_item
+               costo_unitario, margen_porcentaje, precio_venta_unitario, 
+               subtotal_item, enlace_referencia
         FROM cotizacion_items
         WHERE cotizacion_id = %s
         ORDER BY numero_item ASC;
@@ -525,6 +464,7 @@ def guardar_items_masivos_db(df_items: pd.DataFrame) -> tuple[bool, str]:
             "Costo Sugerido (COP)": "costo_unitario",
             "Valor Unitario": "costo_unitario",
             "costo_unitario": "costo_unitario",
+            "enlace_referencia": "enlace_referencia",
         }
 
         df = df.rename(columns=mapeo_columnas)
@@ -569,7 +509,74 @@ def guardar_items_masivos_db(df_items: pd.DataFrame) -> tuple[bool, str]:
             index=False,
         )
 
+        # 6. Invalidación de caché de consultas afectadas
+        obtener_banco_items.clear()
+        cargar_catalogo_historico.clear()
+
         return True, f"Se registraron {len(df_final)} ítems con éxito."
 
     except Exception as e:
         return False, str(e)
+
+def actualizar_items_y_cotizacion_db(cotizacion_id: int, df_items: pd.DataFrame) -> bool:
+    """Reemplaza los ítems de una cotización y recalcula Subtotal, IVA y Total en PostgreSQL."""
+    sql_delete = "DELETE FROM cotizacion_items WHERE cotizacion_id = %s;"
+    sql_insert = """
+        INSERT INTO cotizacion_items (
+            cotizacion_id, numero_item, descripcion, cantidad,
+            unidad_medida, costo_unitario, margen_porcentaje,
+            precio_venta_unitario, subtotal_item, enlace_referencia
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s);
+    """
+    sql_recalcular = """
+        WITH totales AS (
+            SELECT 
+                COALESCE(SUM(subtotal_item), 0.0) AS nuevo_subtotal,
+                porcentaje_iva
+            FROM cotizaciones c
+            LEFT JOIN cotizacion_items ci ON c.id = ci.cotizacion_id
+            WHERE c.id = %s
+            GROUP BY c.id, c.porcentaje_iva
+        )
+        UPDATE cotizaciones
+        SET 
+            subtotal = totales.nuevo_subtotal,
+            impuesto_iva = totales.nuevo_subtotal * (COALESCE(totales.porcentaje_iva, 0.0) / 100.0),
+            total = totales.nuevo_subtotal * (1 + (COALESCE(totales.porcentaje_iva, 0.0) / 100.0))
+        FROM totales
+        WHERE cotizaciones.id = %s;
+    """
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql_delete, (cotizacion_id,))
+                
+                for idx, (_, row) in enumerate(df_items.iterrows(), start=1):
+                    cant = float(row.get("cantidad", 0.0) or 0.0)
+                    costo = float(row.get("costo_unitario", 0.0) or 0.0)
+                    margen = float(row.get("margen_porcentaje", 0.0) or 0.0)
+                    p_venta = costo * (1 + (margen / 100.0))
+                    subtotal = cant * p_venta
+
+                    cur.execute(
+                        sql_insert,
+                        (
+                            cotizacion_id,
+                            idx,
+                            str(row.get("descripcion", "") or "").strip(),
+                            cant,
+                            str(row.get("unidad_medida", "UNIDAD") or "UNIDAD").strip(),
+                            costo,
+                            margen,
+                            p_venta,
+                            subtotal,
+                            str(row.get("enlace_referencia", "") or "").strip(),
+                        ),
+                    )
+
+                cur.execute(sql_recalcular, (cotizacion_id, cotizacion_id))
+            conn.commit()
+        return True
+    except Exception as e:
+        st.error(f"Error al actualizar ítems en la base de datos: {e}")
+        return False
