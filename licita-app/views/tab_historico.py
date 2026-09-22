@@ -43,21 +43,29 @@ def render_tab_historico():
 
     # 2. Métricas Resumen
     # 1. Cargar detalle de ítems con anticipación para calcular costos y utilidad
+    # 2. Métricas Resumen
     df_items = cargar_detalle_cotizacion(cot_id_sel)
 
-    # Cálculo acumulado del costo total base (Saldo sin margen)
     if not df_items.empty:
+        # Costo total acum
         costo_total_acum = (
             pd.to_numeric(df_items["costo_unitario"], errors="coerce").fillna(0.0)
             * pd.to_numeric(df_items["cantidad"], errors="coerce").fillna(0.0)
         ).sum()
+
+        # Recalcular Subtotal Venta usando el factor divisor (1 - margen/100)
+        margen_serie = pd.to_numeric(df_items["margen_porcentaje"], errors="coerce").fillna(0.0)
+        divisor_serie = (1.0 - (margen_serie / 100.0)).apply(lambda x: x if x > 0 else 1.0)
+        p_venta_serie = pd.to_numeric(df_items["costo_unitario"], errors="coerce").fillna(0.0) / divisor_serie
+        
+        subtotal_venta = (p_venta_serie * pd.to_numeric(df_items["cantidad"], errors="coerce").fillna(0.0)).sum()
     else:
         costo_total_acum = 0.0
+        subtotal_venta = float(cot_info["subtotal"] or 0.0)
 
-    subtotal_venta = float(cot_info["subtotal"] or 0.0)
     utilidad_bruta = subtotal_venta - costo_total_acum
     margen_global_pct = (utilidad_bruta / subtotal_venta * 100.0) if subtotal_venta > 0 else 0.0
-
+    
     # 2. Métricas Resumen Expandidas
     col_m1, col_m2, col_m3, col_m4, col_m5, col_m6 = st.columns(6)
 
@@ -98,6 +106,16 @@ def render_tab_historico():
         st.metric(
             label="Total Oferta",
             value=f"${cot_info['total']:,.2f}",
+        )
+
+    # -------------------------------------------------------------
+    # AGREGAR AQUÍ (Línea 97 aprox.)
+    # -------------------------------------------------------------
+    if subtotal_venta > 0:
+        st.info(
+            f"💡 **Cálculo de Margen Aplicado:** Esta cotización tiene un costo base de **${costo_total_acum:,.2f}**"
+            f"Un precio de venta de **${subtotal_venta:,.2f}**"
+            f"Generando una utilidad neta de **${utilidad_bruta:,.2f}** ({margen_global_pct:.2f}% sobre venta)."
         )
 
     st.markdown("---")
@@ -276,12 +294,13 @@ def render_tab_historico():
                 .astype(float)
             )
 
-            df_procesado["precio_venta_unitario"] = df_procesado[
-                "costo_unitario"
-            ] * (1 + (df_procesado["margen_porcentaje"] / 100.0))
-            df_procesado["subtotal_item"] = (
-                df_procesado["cantidad"] * df_procesado["precio_venta_unitario"]
-            )
+            # CÓDIGO CORREGIDO (tab_historico_5.py)
+            factor_divisor = 1.0 - (df_procesado["margen_porcentaje"] / 100.0)
+            # Evitar división por cero si el margen fuera 100%
+            factor_divisor = factor_divisor.apply(lambda x: x if x > 0 else 1.0)
+
+            df_procesado["precio_venta_unitario"] = df_procesado["costo_unitario"] / factor_divisor
+            df_procesado["subtotal_item"] = df_procesado["cantidad"] * df_procesado["precio_venta_unitario"]
 
             col_save, _ = st.columns([2, 6])
             with col_save:
@@ -397,14 +416,17 @@ def render_tab_historico():
         else:
             costo_base = costo_ingresado
 
-        p_venta = costo_base * (1 + (margen_item / 100.0))
+        # CÓDIGO CORREGIDO (tab_historico_5.py)
+        factor_item = 1.0 - (margen_item / 100.0)
+        p_venta = costo_base / factor_item if factor_item > 0 else costo_base
         subt_item = p_venta * cant_item
 
         if costo_ingresado > 0:
+            factor_display = f"{factor_item:.2f}" if factor_item > 0 else "1.00"
             st.info(
-                "💡 **Resumen del Cálculo:** Costo Base sin IVA:"
-                f" **${costo_base:,.2f}** | Precio Venta Unitario:"
-                f" **${p_venta:,.2f}** | Subtotal Ítem: **${subt_item:,.2f}**"
+                f"💡 **Desglose del Ítem:** Costo Base (Sin IVA): **${costo_base:,.2f}** | "
+                f"Factor Divisor: **÷ {factor_display}** (Margen {margen_item:.1f}%) | "
+                f"Precio Venta Unitario: **${p_venta:,.2f}** | Subtotal: **${subt_item:,.2f}**"
             )
 
         if st.button(
