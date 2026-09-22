@@ -1,10 +1,10 @@
-# database/cotizaciones_db.py
 import io
 import pandas as pd
 import streamlit as st
 from sqlalchemy import text
 from datetime import datetime
 from database.connection import get_db_connection, get_engine
+# Ejemplo si está en database/db.py o database/connection.py
 
 
 def cargar_catalogo_completo() -> pd.DataFrame:
@@ -419,9 +419,30 @@ def cargar_items_por_cotizacion(cotizacion_id: int) -> pd.DataFrame:
         return pd.DataFrame()
 
 # Alias y funciones de compatibilidad para las vistas
-def cargar_detalle_cotizacion(cotizacion_id: int) -> pd.DataFrame:
-    """Obtiene los ítems de una cotización específica (alias para tab_historico.py)."""
-    return cargar_items_por_cotizacion(cotizacion_id)
+def cargar_detalle_cotizacion(cotizacion_id, numero_cotizacion=None):
+    """Carga los ítems de la cotización asegurando tipos de datos nativos de Python."""
+    # Convertir cotizacion_id de numpy.int64 a int nativo de Python
+    try:
+        cotizacion_id_native = int(cotizacion_id) if cotizacion_id is not None else None
+    except (ValueError, TypeError):
+        cotizacion_id_native = cotizacion_id
+
+    query_id = "SELECT * FROM cotizacion_items WHERE cotizacion_id = %s ORDER BY id ASC;"
+    
+    try:
+        with get_db_connection() as conn:
+            # 1. Intentar por ID entero nativo
+            df = pd.read_sql(query_id, conn, params=(cotizacion_id_native,))
+            
+            # 2. Fallback por número de cotización si no se encontraron ítems
+            if df.empty and numero_cotizacion:
+                query_num = "SELECT * FROM cotizacion_items WHERE cotizacion_id = %s OR numero_cotizacion = %s ORDER BY id ASC;"
+                df = pd.read_sql(query_num, conn, params=(str(cotizacion_id_native), str(numero_cotizacion)))
+                
+            return df
+    except Exception as e:
+        st.error(f"Error cargando detalle de cotización: {e}")
+        return pd.DataFrame()
 
 
 def eliminar_cotizacion_completa(cotizacion_id: int) -> bool:

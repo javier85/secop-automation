@@ -8,6 +8,17 @@ from config import DATABASE_URL, DB_HOST, DB_NAME, DB_PASS, DB_PORT, DB_USER
 _engine = None
 
 DB_URL = os.getenv("DATABASE_URL", "postgresql://usuario:password@localhost:5432/nombre_db")
+def obtener_conexion():
+    """Retorna una conexión directa de psycopg2 a la base de datos."""
+    if DATABASE_URL:
+        return psycopg2.connect(DATABASE_URL)
+    return psycopg2.connect(
+        host=DB_HOST,
+        port=DB_PORT,
+        dbname=DB_NAME,
+        user=DB_USER,
+        password=DB_PASS,
+    )
 
 # Definir la variable global 'engine'
 engine = create_engine(DB_URL)
