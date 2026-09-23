@@ -1,11 +1,10 @@
 import io
+import re
 import pandas as pd
 import streamlit as st
 from sqlalchemy import text
 from datetime import datetime
 from database.connection import get_db_connection, get_engine
-# Ejemplo si está en database/db.py o database/connection.py
-
 
 def cargar_catalogo_completo() -> pd.DataFrame:
     """Carga todos los campos de la tabla banco_items_historico para la IA y la vista."""
@@ -128,32 +127,66 @@ def guardar_cambios_bd(df_original: pd.DataFrame, cambios: dict):
 
 
         
-def generar_numero_cotizacion() -> str:
-    """Genera un consecutivo automático en formato COT-AAAA-XXX."""
-    anio_actual = datetime.now().year
-    prefix = f"COT-{anio_actual}-"
-
-    query = """
-        SELECT numero_cotizacion 
-        FROM cotizaciones 
-        WHERE numero_cotizacion LIKE %s 
-        ORDER BY id DESC 
-        LIMIT 1;
+def generar_numero_cotizacion(numero_proceso: str = None) -> str:
     """
-    try:
-        with get_db_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(query, (f"{prefix}%",))
-                row = cur.fetchone()
-                if row:
-                    ultimo_num = row[0]
-                    partes = ultimo_num.split("-")
-                    if len(partes) == 3 and partes[2].isdigit():
-                        siguiente = int(partes[2]) + 1
-                        return f"{prefix}{siguiente:03d}"
-                return f"{prefix}001"
-    except Exception:
-        return f"{prefix}001"
+    Genera un número de cotización dinámico:
+    - Si recibe numero_proceso: [NUM_PROCESO]-COT-01, [NUM_PROCESO]-COT-02...
+    - Si no recibe numero_proceso: COT-AAAA-001, COT-AAAA-002...
+    """
+    if numero_proceso and numero_proceso.strip():
+        num_proc_clean = numero_proceso.strip()
+        prefix = f"{num_proc_clean}-COT-"
+        
+        query = """
+            SELECT numero_cotizacion 
+            FROM cotizaciones 
+            WHERE numero_proceso = %s AND numero_cotizacion LIKE %s 
+            ORDER BY id DESC 
+            LIMIT 1;
+        """
+        try:
+            with get_db_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(query, (num_proc_clean, f"{prefix}%"))
+                    row = cur.fetchone()
+                    if row and row[0]:
+                        ultimo_num = row[0]
+                        # Extraer el consecutivo final después de '-COT-'
+                        if "-COT-" in ultimo_num:
+                            sufijo = ultimo_num.rsplit("-COT-", 1)[1]
+                            if sufijo.isdigit():
+                                siguiente = int(sufijo) + 1
+                                return f"{prefix}{siguiente:02d}"
+                    return f"{prefix}01"
+        except Exception:
+            return f"{prefix}01"
+
+    else:
+        # Fallback para cotizaciones independientes / generales
+        anio_actual = datetime.now().year
+        prefix = f"COT-{anio_actual}-"
+        query = """
+            SELECT numero_cotizacion 
+            FROM cotizaciones 
+            WHERE (numero_proceso IS NULL OR numero_proceso = '') 
+              AND numero_cotizacion LIKE %s 
+            ORDER BY id DESC 
+            LIMIT 1;
+        """
+        try:
+            with get_db_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(query, (f"{prefix}%",))
+                    row = cur.fetchone()
+                    if row and row[0]:
+                        ultimo_num = row[0]
+                        partes = ultimo_num.split("-")
+                        if len(partes) == 3 and partes[2].isdigit():
+                            siguiente = int(partes[2]) + 1
+                            return f"{prefix}{siguiente:03d}"
+                    return f"{prefix}001"
+        except Exception:
+            return f"{prefix}001"
 
 
 def guardar_cotizacion(
@@ -791,3 +824,55 @@ def actualizar_parametros_globales_db(
     except Exception as e:
         st.error(f"Error al aplicar IVA global a los ítems: {e}")
         return False
+
+def crear_cotizacion_db(
+    tipo_cotizacion: str,
+    numero_proceso: str,
+    margen_global: float = 20.0,
+    porcentaje_iva: float = 19.0,
+    observaciones: str = "",
+    estado: str = "BORRADOR",
+    numero_cotizacion: str = None
+) -> int:
+    """
+    Inserta un nuevo encabezado de cotización en la base de datos PostgreSQL
+    generando automáticamente el consecutivo si no se proporciona, y retorna el ID generado.
+    """
+    # Genera automáticamente el consecutivo (COT-AAAA-XXX) si no viene especificado
+    if not numero_cotizacion:
+        numero_cotizacion = generar_numero_cotizacion()
+
+    query = """
+        INSERT INTO cotizaciones (
+            numero_cotizacion,
+            tipo_cotizacion, 
+            numero_proceso, 
+            margen_global, 
+            porcentaje_iva, 
+            observaciones, 
+            estado
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        RETURNING id;
+    """
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    query, 
+                    (
+                        numero_cotizacion,
+                        tipo_cotizacion, 
+                        numero_proceso, 
+                        margen_global, 
+                        porcentaje_iva, 
+                        observaciones, 
+                        estado
+                    )
+                )
+                nuevo_id = cur.fetchone()[0]
+            conn.commit()
+        return nuevo_id
+    except Exception as e:
+        st.error(f"Error al crear cotización en la base de datos: {e}")
+        return None

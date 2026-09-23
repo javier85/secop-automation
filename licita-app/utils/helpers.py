@@ -1,8 +1,9 @@
-# utils/helpers.py
-from datetime import datetime
-from pathlib import Path
+
+import pandas as pd
 import re
 from config import BASE_SECOP_DIR
+from datetime import datetime, time
+from pathlib import Path
 
 
 def calcular_semaforo(fecha_limite) -> str:
@@ -79,3 +80,14 @@ def crear_carpeta_licitacion(numero_proceso: str) -> str:
     except Exception as e:
         print(f"[WARN] Error creando carpeta {path_carpeta}: {e}")
     return str(path_carpeta)
+
+def obtener_fecha_hora_objetos(plazo_str):
+    """Convierte un texto de fecha en objetos date y time de Python."""
+    if not plazo_str or pd.isna(plazo_str) or str(plazo_str).strip() in ["", "None", "nan", "Sin fecha"]:
+        return None, time(17, 0, 0)
+    try:
+        clean_str = str(plazo_str).strip().replace("-", "/")
+        dt = pd.to_datetime(clean_str, dayfirst=True)
+        return dt.date(), dt.time()
+    except Exception:
+        return None, time(17, 0, 0)

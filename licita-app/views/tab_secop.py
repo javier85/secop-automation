@@ -7,8 +7,11 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, time
 from config import BASE_SECOP_DIR
+from utils.helpers import (
+    obtener_fecha_hora_objetos,
+)
 from services.ai_service import (
     analizar_licitacion_con_gesstionando, 
     verificar_conexion_ollama,
@@ -16,6 +19,9 @@ from services.ai_service import (
 from database.cotizaciones_db import (
     cargar_cotizaciones,
     cargar_items_por_cotizacion,
+    actualizar_encabezado_cotizacion,
+    crear_cotizacion_db,
+    generar_numero_cotizacion,
 )
 from database.secop_db import (
     calcular_semaforo,
@@ -31,7 +37,6 @@ from services.filesystem_service import (
 )
 from services.n8n_service import disparar_sincronizacion_secop
 
-# Pipeline Simplificado de Estados SECOP
 ESTADOS_LICITACION = [
     "EN EVALUACIÓN",
     "AUDITADO POR IA",
@@ -42,46 +47,30 @@ ESTADOS_LICITACION = [
     "FINALIZADA",
 ]
 
-# Decorador fragment seguro para compatibilidad con Streamlit
 if hasattr(st, "fragment"):
     fragment_decorator = st.fragment(run_every="60s")
 else:
-
     def fragment_decorator(func):
         return func
 
-# Verificación de compatibilidad para la API de Diálogos
-dialog_decorator = (
-    st.dialog if hasattr(st, "dialog") else st.experimental_dialog
-)
+dialog_decorator = st.dialog if hasattr(st, "dialog") else st.experimental_dialog
 BASE_WINDOWS_SECOP = r"E:\OneDrive\Documentos\Empresa Puentes\Secop"
 
 def obtener_ruta_windows_completa(ruta: str) -> str:
-    """Convierte cualquier ruta (Docker/Linux/Relativa) a la ruta absoluta de Windows."""
     if not ruta or pd.isna(ruta) or not str(ruta).strip():
         return ""
-    
     ruta_str = str(ruta).strip()
-    
-    # 1. Normaliza separadores a '/' para que pathlib funcione igual en Linux/Docker/Windows
     ruta_normalizada = ruta_str.replace("\\", "/")
-    
-    # 2. Si ya es una ruta absoluta de Windows válida (ej. E:/OneDrive/...)
     if re.match(r"^[a-zA-Z]:", ruta_str) and "data" not in ruta_str.lower():
         return str(Path(ruta_normalizada)).replace("/", "\\")
-        
-    # 3. Extrae solo el nombre de la subcarpeta (ej. IPMC-028-2026) y une a la base de Windows
     nombre_subcarpeta = Path(ruta_normalizada).name
     return rf"{BASE_WINDOWS_SECOP}\{nombre_subcarpeta}"
 
-
 def abrir_carpeta_sistema(ruta: str):
-    """Intenta abrir la carpeta localmente o notifica en entornos remotos/Docker."""
     ruta_win = obtener_ruta_windows_completa(ruta)
     if not ruta_win:
         st.warning("No se especificó ninguna ruta válida.")
         return
-
     sistema = platform.system()
     try:
         if sistema == "Windows" and os.path.exists(ruta_win):
@@ -96,12 +85,9 @@ def abrir_carpeta_sistema(ruta: str):
         st.toast(f"No se pudo abrir automáticamente: {e}", icon="⚠️")
 
 def estilo_semaforo(val):
-    """Aplica el estilo CSS a las celdas según el estado del semáforo."""
     val_str = str(val).strip()
-
     if "Vencido" in val_str or "Cerrado" in val_str:
         return "background-color: #D32F2F; color: white; font-weight: bold; text-align: center;"
-
     if "días" in val_str:
         try:
             dias = int(val_str.split("días")[0].strip())
@@ -111,20 +97,14 @@ def estilo_semaforo(val):
                 return "background-color: #388E3C; color: white; font-weight: bold; text-align: center;"
         except ValueError:
             pass
-
     return "text-align: center;"
 
-
 def categorizar_semaforo(val: str) -> str:
-    """Clasifica el texto del semáforo en categorías para filtrado."""
     val_str = str(val).strip()
-
     if not val_str or val_str in ["Sin fecha", "None", "nan"]:
         return "⚪ Sin Clasificación"
-
     if "Vencido" in val_str or "🔴" in val_str:
         return "🔴 Vencido"
-
     match = re.search(r"(\d+)\s*días", val_str)
     if match:
         dias = int(match.group(1))
@@ -132,9 +112,111 @@ def categorizar_semaforo(val: str) -> str:
             return "🟡 Urgente (≤ 3 días)"
         else:
             return "🟢 Vigente (> 3 días)"
-
     return "⚪ Sin Clasificación"
 
+# ==============================================================================
+# MODAL NATIVO: CREAR NUEVA COTIZACIÓN PARA PROCESO SECOP
+# ==============================================================================
+@dialog_decorator("➕ Crear Nueva Cotización para el Proceso")
+def modal_crear_cotizacion_proceso(num_proceso):
+    st.markdown(f"Asociando cotización a licitación: **`{num_proceso}`**")
+    
+    with st.form(f"form_crear_cot_{num_proceso}"):
+        col1, col2 = st.columns(2)
+        with col1:
+            num_cotiz_input = st.text_input(
+                "Número de Cotización *",
+                value=generar_numero_cotizacion(num_proceso),
+                key=f"modal_num_cot_{num_proceso}"
+            )
+            tipo_cot = st.selectbox("Tipo de Cotización", ["GENERAL", "EPP", "SOFTWARE", "INFRAESTRUCTURA", "SERVICIOS"])
+            margen_base = st.number_input("Margen Base (%)", min_value=0.0, max_value=100.0, value=20.0, step=1.0)
+        with col2:
+            iva_base = st.number_input("IVA Global (%)", min_value=0.0, max_value=100.0, value=19.0, step=1.0)
+            estado_ini = st.selectbox("Estado Inicial", ["BORRADOR", "ENVIADA"])
+            
+        obs = st.text_area("Observaciones Iniciales", placeholder="Condiciones o notas de la cotización...")
+        
+        if st.form_submit_button("🚀 Generar y Abrir en Editor", type="primary", use_container_width=True):
+            if not num_cotiz_input.strip():
+                st.error("El número de cotización no puede estar vacío.")
+            else:
+                cot_id = crear_cotizacion_db(
+                    numero_cotizacion=num_cotiz_input.strip(),
+                    tipo_cotizacion=tipo_cot,
+                    numero_proceso=num_proceso,
+                    margen_global=margen_base,
+                    porcentaje_iva=iva_base,
+                    observaciones=obs.strip(),
+                    estado=estado_ini
+                )
+                if cot_id:
+                    st.session_state["cot_id_activa"] = cot_id
+                    st.session_state["vista_actual"] = "historico"
+                    st.toast("✅ Cotización creada exitosamente.", icon="🎉")
+                    st.rerun()
+                else:
+                    st.error("Error al registrar la cotización en la base de datos.")
+
+def componente_copiar_ruta(ruta: str):
+    """Genera un botón/recuadro interactivo que copia la ruta al portapapeles al hacer clic."""
+    ruta_escapada = ruta.replace("\\", "\\\\").replace("'", "\\'")
+    
+    html_code = f"""
+    <div style="margin-bottom: 5px;">
+        <button id="btnCopy" onclick="copiarAlPortapapeles()" style="
+            width: 100%;
+            padding: 10px 14px;
+            background-color: #0E1117;
+            color: #FAFAFA;
+            border: 1px solid #4A4A4A;
+            border-radius: 8px;
+            cursor: pointer;
+            font-family: monospace;
+            font-size: 13px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            transition: background-color 0.2s ease;
+        ">
+            <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{ruta}</span>
+            <span id="txtCopy" style="background: #262730; padding: 4px 8px; border-radius: 4px; font-size: 11px; margin-left: 8px; min-width: 65px; text-align: center;">📋 Copiar</span>
+        </button>
+    </div>
+
+    <script>
+    function copiarAlPortapapeles() {{
+        const textToCopy = '{ruta_escapada}';
+        
+        if (navigator.clipboard && window.isSecureContext) {{
+            navigator.clipboard.writeText(textToCopy);
+        }} else {{
+            let textArea = document.createElement("textarea");
+            textArea.value = textToCopy;
+            textArea.style.position = "fixed";
+            textArea.style.left = "-999999px";
+            document.body.appendChild(textArea);
+            textArea.focus();
+            textArea.select();
+            document.execCommand('copy');
+            textArea.remove();
+        }}
+
+        const label = document.getElementById('txtCopy');
+        const btn = document.getElementById('btnCopy');
+        label.innerText = '✅ ¡Copiado!';
+        label.style.background = '#2E7D32';
+        btn.style.borderColor = '#2E7D32';
+
+        setTimeout(() => {{
+            label.innerText = '📋 Copiar';
+            label.style.background = '#262730';
+            btn.style.borderColor = '#4A4A4A';
+        }}, 2000);
+    }}
+    </script>
+    """
+    components.html(html_code, height=55)
 
 @dialog_decorator("📄 Detalle y Edición del Proceso", width="large")
 def mostrar_modal_licitacion(lic_data):
@@ -145,12 +227,8 @@ def mostrar_modal_licitacion(lic_data):
     # --- TAB 1: VER INFORMACIÓN ---
     with tab_ver:
         st.markdown(f"**Objeto del Proceso:**\n{lic_data['objeto']}")
-        st.markdown(
-            f"**Presupuesto:** {lic_data.get('Presupuesto (COP)', '$ 0.00')}"
-        )
-        st.markdown(
-            f"**Plazo:** {lic_data['plazo_presentacion']} ({lic_data['semaforo']})"
-        )
+        st.markdown(f"**Presupuesto:** {lic_data.get('Presupuesto (COP)', '$ 0.00')}")
+        st.markdown(f"**Plazo:** {lic_data['plazo_presentacion']} ({lic_data['semaforo']})")
         st.markdown(f"**Estado:** `{lic_data['estado']}`")
 
         if lic_data.get("observaciones"):
@@ -166,74 +244,68 @@ def mostrar_modal_licitacion(lic_data):
         c1, c2 = st.columns(2)
         with c1:
             if lic_data.get("enlace_secop"):
-                st.link_button(
-                    "🌐 Abrir en SECOP",
-                    lic_data["enlace_secop"],
-                    use_container_width=True,
-                )
+                st.link_button("🌐 Abrir en SECOP", lic_data["enlace_secop"], use_container_width=True)
         with c2:
             ruta_raw = str(lic_data.get("carpeta", "")).strip()
             if ruta_raw:
                 ruta_completa = obtener_ruta_windows_completa(ruta_raw)
-
                 st.markdown("**📁 Ruta Carpeta Local (Windows):**")
-                # Muestra la caja interactiva con copiado en 1-clic
                 componente_copiar_ruta(ruta_completa)
-
                 if st.button("📂 Intentar Abrir Localmente", use_container_width=True):
                     abrir_carpeta_sistema(ruta_raw)
 
     # --- TAB 2: EDITAR DATOS DEL PROCESO ---
     with tab_editar:
         with st.form(f"form_modal_edit_{lic_data['id']}"):
-            e_num = st.text_input(
-                "Número Proceso", value=str(lic_data["numero_proceso"])
-            )
+            e_num = st.text_input("Número Proceso", value=str(lic_data["numero_proceso"]))
             e_ent = st.text_input("Entidad", value=str(lic_data["entidad"]))
-            e_obj = st.text_area(
-                "Objeto Completo", value=str(lic_data["objeto"]), height=120
-            )
-            e_pres = st.number_input(
-                "Presupuesto (COP)",
-                value=float(lic_data["presupuesto"] or 0.0),
-            )
-            e_plazo = st.text_input(
-                "Plazo Presentación",
-                value=str(lic_data["plazo_presentacion"] or ""),
-            )
+            e_obj = st.text_area("Objeto Completo", value=str(lic_data["objeto"]), height=120)
+            e_pres = st.number_input("Presupuesto (COP)", value=float(lic_data["presupuesto"] or 0.0))
 
-            idx_est = (
-                ESTADOS_LICITACION.index(lic_data["estado"])
-                if lic_data["estado"] in ESTADOS_LICITACION
-                else 0
-            )
+            # --- NUEVO SELECTOR DE FECHA Y HORA ---
+            fecha_val, hora_val = obtener_fecha_hora_objetos(lic_data.get("plazo_presentacion"))
+            
+            c_fec, c_hor = st.columns(2)
+            with c_fec:
+                e_fecha = st.date_input(
+                    "Fecha Límite *",
+                    value=fecha_val,
+                    format="DD/MM/YYYY",
+                    key=f"edit_fec_{lic_data['id']}"
+                )
+            with c_hor:
+                e_hora = st.time_input(
+                    "Hora Límite *",
+                    value=hora_val,
+                    key=f"edit_hor_{lic_data['id']}"
+                )
+
+            idx_est = ESTADOS_LICITACION.index(lic_data["estado"]) if lic_data["estado"] in ESTADOS_LICITACION else 0
             e_est = st.selectbox("Estado", ESTADOS_LICITACION, index=idx_est)
-            e_carp = st.text_input(
-                "Carpeta / Ruta", value=str(lic_data["carpeta"] or "")
-            )
-            e_link = st.text_input(
-                "Enlace SECOP", value=str(lic_data["enlace_secop"] or "")
-            )
-            e_obs = st.text_area(
-                "Observaciones", value=str(lic_data["observaciones"] or "")
-            )
+            e_carp = st.text_input("Carpeta / Ruta", value=str(lic_data["carpeta"] or ""))
+            e_link = st.text_input("Enlace SECOP", value=str(lic_data["enlace_secop"] or ""))
+            e_obs = st.text_area("Observaciones", value=str(lic_data["observaciones"] or ""))
 
-            if st.form_submit_button(
-                "💾 Guardar Cambios", type="primary", use_container_width=True
-            ):
+            if st.form_submit_button("💾 Guardar Cambios", type="primary", use_container_width=True):
+                # Reconstruir la cadena estandarizada DD/MM/YYYY HH:MM:SS
+                if e_fecha:
+                    plazo_final = f"{e_fecha.strftime('%d/%m/%Y')} {e_hora.strftime('%H:%M:%S')}"
+                else:
+                    plazo_final = "Sin fecha"
+
                 guardar_licitacion_secop(
                     id=int(lic_data["id"]),
                     numero_proceso=e_num,
                     entidad=e_ent,
                     objeto=e_obj,
                     presupuesto=float(e_pres),
-                    plazo_presentacion=e_plazo,
+                    plazo_presentacion=plazo_final,
                     estado=e_est,
                     carpeta=e_carp,
                     enlace_secop=e_link,
                     observaciones=e_obs,
                 )
-                st.success("¡Licitación actualizada!")
+                st.success("¡Licitación actualizada correctamente!")
                 st.rerun()
 
     # --- TAB 3: GESTIÓN DE COTIZACIONES ASOCIADAS ---
@@ -255,15 +327,9 @@ def mostrar_modal_licitacion(lic_data):
                 hide_index=True,
                 column_config={
                     "id": None,
-                    "subtotal": st.column_config.NumberColumn(
-                        "Subtotal", format="$ %,.2f"
-                    ),
-                    "impuesto_iva": st.column_config.NumberColumn(
-                        "IVA", format="$ %,.2f"
-                    ),
-                    "total": st.column_config.NumberColumn(
-                        "Total", format="$ %,.2f"
-                    ),
+                    "subtotal": st.column_config.NumberColumn("Subtotal", format="$ %,.2f"),
+                    "impuesto_iva": st.column_config.NumberColumn("IVA", format="$ %,.2f"),
+                    "total": st.column_config.NumberColumn("Total", format="$ %,.2f"),
                 },
             )
 
@@ -271,100 +337,140 @@ def mostrar_modal_licitacion(lic_data):
                 f"Cotización #{r['numero_cotizacion']} ({r['estado']})": r["id"]
                 for _, r in df_cot_lic.iterrows()
             }
-            cot_sel = st.selectbox(
-                "Ver detalle de cotización", list(cot_ids.keys())
-            )
+            cot_sel = st.selectbox("Ver detalle de cotización", list(cot_ids.keys()))
             if cot_sel:
-                items_df = cargar_items_por_cotizacion(cot_ids[cot_sel])
-                st.dataframe(
-                    items_df, use_container_width=True, hide_index=True
-                )
+                cot_id_seleccionada = cot_ids[cot_sel]
+                items_df = cargar_items_por_cotizacion(cot_id_seleccionada)
+                st.dataframe(items_df, use_container_width=True, hide_index=True)
+                
+                if st.button("✏️ Abrir esta Cotización en Editor", key=f"btn_open_ed_{cot_id_seleccionada}", use_container_width=True):
+                    st.session_state["cot_id_activa"] = cot_id_seleccionada
+                    st.session_state["vista_actual"] = "historico"
+                    st.rerun()
         else:
             st.info("No existen cotizaciones registradas para este proceso.")
 
         st.markdown("---")
 
-        c_crear, c_ir = st.columns(2)
-        with c_crear:
-            if st.button(
-                "➕ Crear nueva cotización para esta licitación",
-                use_container_width=True,
-                type="primary",
-            ):
-                st.session_state["vista_actual"] = "nueva_cotizacion"
-                st.session_state["proceso_preseleccionado"] = num_proceso
-                st.rerun()
+        # FORMULARIO EMBEDIDO EN LUGAR DE MODAL ANIDADO
+        with st.expander("➕ Crear Nueva Cotización para este Proceso", expanded=df_cot_lic.empty):
+            with st.form(f"form_crear_cot_inline_{num_proceso}"):
+                col1, col2 = st.columns(2)
+                with col1:
+                    # 1. Traer el consecutivo dinámico basado en num_proceso y permitir editarlo
+                    num_cotiz_input = st.text_input(
+                        "Número de Cotización *",
+                        value=generar_numero_cotizacion(num_proceso),
+                        key=f"num_cot_{num_proceso}"
+                    )
+                    tipo_cot = st.selectbox("Tipo de Cotización", ["GENERAL", "EPP", "SOFTWARE", "INFRAESTRUCTURA", "SERVICIOS"], key=f"tipo_cot_{num_proceso}")
+                    margen_base = st.number_input("Margen Base (%)", min_value=0.0, max_value=100.0, value=20.0, step=1.0, key=f"margen_{num_proceso}")
+                with col2:
+                    iva_base = st.number_input("IVA Global (%)", min_value=0.0, max_value=100.0, value=19.0, step=1.0, key=f"iva_{num_proceso}")
+                    estado_ini = st.selectbox("Estado Inicial", ["BORRADOR", "ENVIADA"], key=f"est_{num_proceso}")
+                    
+                obs = st.text_area("Observaciones Iniciales", placeholder="Condiciones o notas de la cotización...", key=f"obs_{num_proceso}")
+                
+                if st.form_submit_button("🚀 Generar y Abrir en Editor", type="primary", use_container_width=True):
+                    if not num_cotiz_input.strip():
+                        st.error("El número de cotización no puede estar vacío.")
+                    else:
+                        cot_id = crear_cotizacion_db(
+                            numero_cotizacion=num_cotiz_input.strip(),
+                            tipo_cotizacion=tipo_cot,
+                            numero_proceso=num_proceso,
+                            margen_global=margen_base,
+                            porcentaje_iva=iva_base,
+                            observaciones=obs.strip(),
+                            estado=estado_ini
+                        )
+                        if cot_id:
+                            st.session_state["cot_id_activa"] = cot_id
+                            st.session_state["vista_actual"] = "historico"
+                            st.toast("✅ Cotización creada exitosamente.", icon="🎉")
+                            st.rerun()
+                        else:
+                            st.error("Error al registrar la cotización en la base de datos.")
 
-        with c_ir:
-            if st.button(
-                "📊 Ir al Histórico General", use_container_width=True
-            ):
-                st.session_state["vista_actual"] = "historico"
-                st.rerun()
+        if st.button("📊 Ir al Histórico General", use_container_width=True):
+            st.session_state["vista_actual"] = "historico"
+            st.rerun()
 
     # --- TAB 4: AUDITORÍA GESSTIONANDO ---
     with tab_auditoria:
         num_proceso_actual = str(lic_data["numero_proceso"])
         ruta_carpeta_proceso = str(lic_data.get("carpeta", ""))
-
-        st.markdown(f"##### 🏛️ Auditoría y Viabilidad para `{num_proceso_actual}`")
-        st.markdown(
-            "El sistema leerá automáticamente los PDFs ubicados en la carpeta local del proceso "
-            "para ejecutar el análisis financiero, tributario y jurídico con Ollama."
-        )
-
-        # Muestra la ruta física que se va a escanear
-        ruta_completa_win = obtener_ruta_windows_completa(ruta_carpeta_proceso)
-        st.info(f"📁 **Carpeta Origen:** `{ruta_completa_win or 'No especificada'}`")
-
         ollama_activo = verificar_conexion_ollama()
-        if not ollama_activo:
-            st.error("🔴 Servicio de Ollama desconectado. Inicie Ollama para realizar el análisis.")
 
-        modelo_llm = st.selectbox(
-            "Modelo IA",
-            ["llama3.2", "llama3.1", "mistral", "gemma2"],
-            index=0,
-            disabled=not ollama_activo,
-            key=f"mod_ia_{lic_data['id']}"
-        )
+        # Header de Estado
+        col_status1, col_status2 = st.columns([3, 1])
+        with col_status1:
+            st.markdown(f"##### 🏛️ Auditoría y Viabilidad para `{num_proceso_actual}`")
+        with col_status2:
+            if ollama_activo:
+                st.markdown("<span style='color: #4ade80; font-weight: 700; background: rgba(34,197,94,0.15); padding: 4px 10px; border-radius: 12px; border: 1px solid #22c55e;'>🟢 Ollama Online</span>", unsafe_allow_html=True)
+            else:
+                st.markdown("<span style='color: #f87171; font-weight: 700; background: rgba(239,68,68,0.15); padding: 4px 10px; border-radius: 12px; border: 1px solid #ef4444;'>🔴 Ollama Offline</span>", unsafe_allow_html=True)
 
-        if st.button("🔍 Ejecutar Auditoría desde Carpeta Local", type="primary", use_container_width=True, disabled=not ollama_activo or not ruta_carpeta_proceso, key=f"btn_auditoria_{lic_data['id']}"):
+        st.caption("El motor escanea los expedientes en PDF dentro de la carpeta local y ejecuta la evaluación técnico-financiera con Ollama.")
+
+        ruta_completa_win = obtener_ruta_windows_completa(ruta_carpeta_proceso)
+        st.info(f"📁 **Carpeta Origen Escaneada:** `{ruta_completa_win or 'No especificada'}`")
+
+        # Configuración y Ejecución
+        col_cfg1, col_cfg2 = st.columns([1, 2])
+        with col_cfg1:
+            modelo_llm = st.selectbox(
+                "Modelo IA Motor",
+                ["llama3.2", "llama3.1", "mistral", "gemma2"],
+                index=0,
+                disabled=not ollama_activo,
+                key=f"mod_ia_{lic_data['id']}"
+            )
             
-            with st.spinner("Leyendo PDFs, extrayendo texto y generando dictamen con Ollama..."):
-                try:
-                    # 1. Ejecutamos el pre-procesamiento local con el método de filesystem_service
-                    texto_plano_consolidado = consolidar_documentos_licitacion(ruta_carpeta_proceso)
-                    
-                    # 2. Enviamos el texto consolidado a Ollama a través del servicio de IA
-                    informe_resultado = analizar_licitacion_con_gesstionando(
-                        texto_consolidado=texto_plano_consolidado,
-                        numero_proceso=num_proceso_actual,
-                        model=modelo_llm
-                    )
+            btn_ejecutar = st.button(
+                "🔍 Ejecutar Auditoría IA", 
+                type="primary", 
+                use_container_width=True, 
+                disabled=not ollama_activo or not ruta_carpeta_proceso, 
+                key=f"btn_auditoria_{lic_data['id']}"
+            )
 
-                    # 3. Registramos el dictamen en la base de datos
-                    registrar_auditoria_ia(
-                        numero_proceso=num_proceso_actual,
-                        dictamen_completo=informe_resultado
-                    )
-                    st.toast(f"✅ Proceso {num_proceso_actual} auditado exitosamente.", icon="💾")
+        with col_cfg2:
+            if btn_ejecutar:
+                with st.spinner("📄 Procesando documentos y evaluando viabilidad con Ollama..."):
+                    try:
+                        texto_plano_consolidado = consolidar_documentos_licitacion(ruta_carpeta_proceso)
+                        informe_resultado = analizar_licitacion_con_gesstionando(
+                            texto_consolidado=texto_plano_consolidado,
+                            numero_proceso=num_proceso_actual,
+                            model=modelo_llm
+                        )
+                        registrar_auditoria_ia(
+                            numero_proceso=num_proceso_actual,
+                            dictamen_completo=informe_resultado
+                        )
+                        st.toast(f"✅ Proceso {num_proceso_actual} auditado.", icon="💾")
+                        st.session_state[f"last_audit_{lic_data['id']}"] = informe_resultado
+                    except Exception as e:
+                        st.error(f"Error al auditorizar: {str(e)}")
 
-                    st.success("✅ Auditoría completada con éxito.")
-                    st.markdown("---")
-                    st.markdown(informe_resultado)
-
-                    st.download_button(
-                        label="📥 Descargar Informe de Evaluación (.md)",
-                        data=informe_resultado,
-                        file_name=f"Informe_Viabilidad_{num_proceso_actual}.md",
-                        mime="text/markdown",
-                        use_container_width=True,
-                        key=f"download_auditoria_{lic_data['id']}"
-                    )
-
-                except Exception as e:
-                    st.error(f"Error durante el procesamiento: {str(e)}")
+            informe_existente = st.session_state.get(f"last_audit_{lic_data['id']}") or lic_data.get("dictamen_ia")
+            
+            if informe_existente:
+                st.markdown("### 📋 Dictamen Emitido")
+                st.markdown(
+                    f"<div style='background: #1e222d; border: 1px solid #2d3345; border-radius: 8px; padding: 15px; max-height: 400px; overflow-y: auto; color: #e2e8f0; font-size: 0.9rem;'>{informe_existente}</div>",
+                    unsafe_allow_html=True
+                )
+                st.download_button(
+                    label="📥 Descargar Informe Completo (.md)",
+                    data=str(informe_existente),
+                    file_name=f"Informe_Viabilidad_{num_proceso_actual}.md",
+                    mime="text/markdown",
+                    use_container_width=True,
+                    key=f"dl_aud_{lic_data['id']}"
+                )
 
 @fragment_decorator
 def render_tab_secop():
@@ -424,9 +530,14 @@ def render_tab_secop():
                 presupuesto = st.number_input(
                     "Presupuesto Estimado (COP)", min_value=0.0, step=100000.0
                 )
-                plazo = st.text_input(
-                    "Plazo Presentación", placeholder="Ej: 30/08/2026 17:00"
-                )
+
+                # --- SELECTOR DE FECHA Y HORA ---
+                c_fec_n, c_hor_n = st.columns(2)
+                with c_fec_n:
+                    n_fecha = st.date_input("Fecha Límite", value=None, format="DD/MM/YYYY")
+                with c_hor_n:
+                    n_hora = st.time_input("Hora Límite", value=time(17, 0, 0))
+
                 estado = st.selectbox("Estado", ESTADOS_LICITACION)
                 carpeta = st.text_input(
                     "Carpeta / ID Drive", placeholder="Ej: PMM-MC-010-2026"
@@ -444,8 +555,7 @@ def render_tab_secop():
                 ):
                     if not num_proc.strip() or not entidad.strip():
                         st.error(
-                            "El número de proceso y la entidad son"
-                            " obligatorios."
+                            "El número de proceso y la entidad son obligatorios."
                         )
                     else:
                         ruta_carpeta_final = crear_carpeta_licitacion(
@@ -454,23 +564,26 @@ def render_tab_secop():
                             else num_proc.strip()
                         )
 
+                        # --- CONSTRUCCIÓN DEL PLAZO ---
+                        if n_fecha:
+                            plazo_nuevo = f"{n_fecha.strftime('%d/%m/%Y')} {n_hora.strftime('%H:%M:%S') if n_hora else '17:00:00'}"
+                        else:
+                            plazo_nuevo = "Sin fecha"
+
                         guardar_licitacion_secop(
                             id=None,
                             numero_proceso=num_proc.strip(),
                             entidad=entidad.strip(),
                             objeto=objeto.strip(),
                             presupuesto=float(presupuesto),
-                            plazo_presentacion=plazo.strip(),
+                            plazo_presentacion=plazo_nuevo,
                             estado=estado,
                             carpeta=ruta_carpeta_final,
                             enlace_secop=link.strip(),
                             observaciones=obs.strip(),
-                            dictamen_ia=lic_data.get("dictamen_ia"),
-                            fecha_auditoria=lic_data.get("fecha_auditoria"),
                         )
-                        st.success("¡Licitación actualizada!")
+                        st.success("¡Licitación guardada correctamente!")
                         st.rerun()
-
     with col_exp:
         if not df_lic.empty:
             excel_data = generar_excel_licitaciones(df_lic)
@@ -600,16 +713,6 @@ def render_tab_secop():
         " información completa o editar."
     )
 
-    def resolver_ruta_windows(x):
-        if pd.isna(x) or not str(x).strip():
-            return None
-        p = Path(str(x).strip())
-        # Mantiene la lógica original usando BASE_SECOP_DIR dinámico
-        full_path = p if p.is_absolute() else Path(BASE_SECOP_DIR) / p
-        # Convierte las barras / a \ para el Explorador de Windows
-        return str(full_path).replace("/", "\\")
-
-    # Mapeo de la ruta completa de Windows
     df_filtrado["ruta_windows"] = df_filtrado["carpeta"].apply(obtener_ruta_windows_completa)
 
     df_estilizado = df_filtrado.style.map(
@@ -771,63 +874,3 @@ def render_tab_secop():
                         eliminar_licitacion_secop(lic_id_sel)
                         st.success("Licitación eliminada.")
                         st.rerun()
-
-def componente_copiar_ruta(ruta: str):
-    """Genera un botón/recuadro interactivo que copia la ruta al portapapeles al hacer clic."""
-    ruta_escapada = ruta.replace("\\", "\\\\").replace("'", "\\'")
-    
-    html_code = f"""
-    <div style="margin-bottom: 5px;">
-        <button id="btnCopy" onclick="copiarAlPortapapeles()" style="
-            width: 100%;
-            padding: 10px 14px;
-            background-color: #0E1117;
-            color: #FAFAFA;
-            border: 1px solid #4A4A4A;
-            border-radius: 8px;
-            cursor: pointer;
-            font-family: monospace;
-            font-size: 13px;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            transition: background-color 0.2s ease;
-        ">
-            <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{ruta}</span>
-            <span id="txtCopy" style="background: #262730; padding: 4px 8px; border-radius: 4px; font-size: 11px; margin-left: 8px; min-width: 65px; text-align: center;">📋 Copiar</span>
-        </button>
-    </div>
-
-    <script>
-    function copiarAlPortapapeles() {{
-        const textToCopy = '{ruta_escapada}';
-        
-        if (navigator.clipboard && window.isSecureContext) {{
-            navigator.clipboard.writeText(textToCopy);
-        }} else {{
-            let textArea = document.createElement("textarea");
-            textArea.value = textToCopy;
-            textArea.style.position = "fixed";
-            textArea.style.left = "-999999px";
-            document.body.appendChild(textArea);
-            textArea.focus();
-            textArea.select();
-            document.execCommand('copy');
-            textArea.remove();
-        }}
-
-        const label = document.getElementById('txtCopy');
-        const btn = document.getElementById('btnCopy');
-        label.innerText = '✅ ¡Copiado!';
-        label.style.background = '#2E7D32';
-        btn.style.borderColor = '#2E7D32';
-
-        setTimeout(() => {{
-            label.innerText = '📋 Copiar';
-            label.style.background = '#262730';
-            btn.style.borderColor = '#4A4A4A';
-        }}, 2000);
-    }}
-    </script>
-    """
-    components.html(html_code, height=55)
