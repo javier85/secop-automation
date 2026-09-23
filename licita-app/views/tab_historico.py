@@ -6,12 +6,14 @@ from database.cotizaciones_db import (
     actualizar_encabezado_cotizacion,
     actualizar_estado_cotizacion,
     actualizar_items_y_cotizacion_db,
-    agregar_item_a_cotizacion_existente,
     cargar_cotizaciones,
     cargar_detalle_cotizacion,
     eliminar_cotizacion_completa,
+    insertar_item_cotizacion,
 )
-from database.secop_db import cargar_licitaciones
+from database.secop_db import (
+    cargar_licitaciones,
+)
 from services.excel_service import generar_excel_cotizacion
 
 # Mapeo global de Margen Real -> Factor Divisor (de 0% a 90% en pasos de 5%)
@@ -19,11 +21,10 @@ OPCIONES_MARGEN = {
     f"{p}% Margen Real (÷ {1 - p/100:.2f})": p / 100.0 for p in range(0, 95, 5)
 }
 
-
 # ==============================================================================
 # MODAL NATIVO: CALCULADORA Y EDICIÓN AVANZADA DE ÍTEM
 # ==============================================================================
-@st.dialog("🛠️ Calculadora y Edición Avanzada de Ítem", width="large")
+@st.dialog("🛠️ Calculadora y Edición Avanzada de Ítem")
 def modal_editar_item(cot_id_sel, item_row, df_items):
     item_id_edit = item_row["id"]
 
@@ -46,6 +47,15 @@ def modal_editar_item(cot_id_sel, item_row, df_items):
             value=str(item_row.get("unidad_medida", "UNIDAD")),
         )
 
+    # --- LECTURA DINÁMICA DEL MODO DE IVA PREVIO ---
+    opciones_modo_iva = [
+        "Con IVA Incluido",
+        "Sin IVA (Antes de IVA)",
+        "Exento / Excluido (0%)",
+    ]
+    modo_actual = str(item_row.get("tratamiento_iva", "Con IVA Incluido"))
+    idx_modo = opciones_modo_iva.index(modo_actual) if modo_actual in opciones_modo_iva else 0
+
     col_mc3, col_mc4, col_mc5 = st.columns([2, 2, 2.5])
     with col_mc3:
         edit_costo_ingresado = st.number_input(
@@ -57,22 +67,29 @@ def modal_editar_item(cot_id_sel, item_row, df_items):
     with col_mc4:
         edit_modo_iva = st.selectbox(
             "Origen del Costo",
-            options=[
-                "Con IVA Incluido",
-                "Sin IVA (Antes de IVA)",
-                "Exento / Excluido (0%)",
-            ],
-            index=0,
+            options=opciones_modo_iva,
+            index=idx_modo,
         )
     with col_mc5:
         iva_dis = edit_modo_iva == "Exento / Excluido (0%)"
+        iva_previo = float(item_row.get("porcentaje_iva", 19.0))
+        
         edit_tarifa_iva = st.number_input(
             "% IVA Ítem",
             min_value=0.0,
             max_value=100.0,
-            value=0.0 if iva_dis else 19.0,
+            value=0.0 if iva_dis else (iva_previo if iva_previo > 0 else 19.0),
             disabled=iva_dis,
         )
+
+    # Determinación estricta de la tarifa de IVA según exención
+    edit_tarifa_iva_final = 0.0 if iva_dis else edit_tarifa_iva
+
+    # Cálculo del Costo Base Neto según origen
+    if edit_modo_iva == "Con IVA Incluido" and edit_tarifa_iva_final > 0:
+        c_base = edit_costo_ingresado / (1 + (edit_tarifa_iva_final / 100.0))
+    else:
+        c_base = edit_costo_ingresado
 
     margen_actual_pct = float(item_row.get("margen_porcentaje", 20.0))
     closest_margen = min(
@@ -92,22 +109,19 @@ def modal_editar_item(cot_id_sel, item_row, df_items):
         value=str(item_row.get("enlace_referencia", "") or ""),
     )
 
-    if edit_modo_iva == "Con IVA Incluido" and edit_tarifa_iva > 0:
-        c_base = edit_costo_ingresado / (1 + (edit_tarifa_iva / 100.0))
-    else:
-        c_base = edit_costo_ingresado
-
     m_decimal = OPCIONES_MARGEN[edit_margen_label]
     f_divisor = 1.0 - m_decimal
     p_venta_calc = c_base / f_divisor if f_divisor > 0 else c_base
     subt_calc = p_venta_calc * edit_cant
+    iva_item_monto = subt_calc * (edit_tarifa_iva_final / 100.0)
 
     st.info(
         f"💡 **Desglose del Ítem Actualizado:**\n"
         f"- Costo Base Neto: **${c_base:,.2f}**\n"
+        f"- Tratamiento IVA: **{edit_modo_iva}** ({edit_tarifa_iva_final:.1f}% -> ${iva_item_monto:,.2f})\n"
         f"- Factor Divisor: **÷ {f_divisor:.2f}** ({m_decimal*100:.0f}% Margen Real)\n"
         f"- Precio Venta Unitario: **${p_venta_calc:,.2f}**\n"
-        f"- Subtotal Ítem: **${subt_calc:,.2f}**"
+        f"- Subtotal Ítem (sin IVA): **${subt_calc:,.2f}**"
     )
 
     if st.button("💾 Guardar Cambios del Ítem", type="primary", use_container_width=True):
@@ -115,6 +129,8 @@ def modal_editar_item(cot_id_sel, item_row, df_items):
         df_items.loc[df_items["id"] == item_id_edit, "cantidad"] = edit_cant
         df_items.loc[df_items["id"] == item_id_edit, "unidad_medida"] = edit_unid.strip()
         df_items.loc[df_items["id"] == item_id_edit, "costo_unitario"] = c_base
+        df_items.loc[df_items["id"] == item_id_edit, "porcentaje_iva"] = edit_tarifa_iva_final
+        df_items.loc[df_items["id"] == item_id_edit, "tratamiento_iva"] = edit_modo_iva
         df_items.loc[df_items["id"] == item_id_edit, "margen_porcentaje"] = m_decimal * 100.0
         df_items.loc[df_items["id"] == item_id_edit, "precio_venta_unitario"] = p_venta_calc
         df_items.loc[df_items["id"] == item_id_edit, "subtotal_item"] = subt_calc
@@ -123,22 +139,128 @@ def modal_editar_item(cot_id_sel, item_row, df_items):
         exito = actualizar_items_y_cotizacion_db(cot_id_sel, df_items)
         if exito:
             st.toast("✅ Ítem actualizado y totales recalculados.", icon="🎉")
-
-            # 1. Limpiar la selección asignando un nuevo diccionario al state del widget
             tabla_key = f"tabla_items_{cot_id_sel}"
             st.session_state[tabla_key] = {"selection": {"rows": [], "columns": []}}
-
-            # 2. Rerun para cerrar el modal y refrescar la vista
             st.rerun()
         else:
             st.error("Error al guardar en la base de datos.")
 
+# ==============================================================================
+# MODAL NATIVO: EDICIÓN DE ENCABEZADO Y PARÁMETROS GLOBALES
+# ==============================================================================
+@st.dialog("📄 Modificar Parámetros Globales")
+def modal_editar_encabezado(cot_info, cot_id_sel):
+    df_lics = cargar_licitaciones()
+    opciones_lic = {"-- Sin Asociación (General) --": ""}
+    if not df_lics.empty:
+        for _, r_lic in df_lics.iterrows():
+            opciones_lic[f"{r_lic['numero_proceso']} - {r_lic['entidad']}"] = r_lic["numero_proceso"]
 
+    proc_actual = cot_info["numero_proceso"] if pd.notna(cot_info["numero_proceso"]) else ""
+    keys_lic = list(opciones_lic.keys())
+    vals_lic = list(opciones_lic.values())
+    idx_proc = vals_lic.index(proc_actual) if proc_actual in vals_lic else 0
+
+    proceso_sel = st.selectbox("Asociar a Licitación SECOP", keys_lic, index=idx_proc)
+    nuevo_proc = opciones_lic[proceso_sel]
+
+    col_e1, col_e2, col_e3 = st.columns(3)
+    
+    with col_e1:
+        tipos_estandar = ["GENERAL", "EPP", "SOFTWARE", "INFRAESTRUCTURA", "SERVICIOS"]
+        tipo_actual = cot_info["tipo_cotizacion"] if pd.notna(cot_info["tipo_cotizacion"]) else "GENERAL"
+        idx_tipo = tipos_estandar.index(tipo_actual) if tipo_actual in tipos_estandar else 0
+        nuevo_tipo = st.selectbox("Tipo Cotización", tipos_estandar, index=idx_tipo)
+
+    with col_e2:
+        margen_actual = float(cot_info.get("margen_global", 20.0)) if pd.notna(cot_info.get("margen_global")) else 20.0
+        nuevo_margen = st.number_input(
+            "Margen Base (%)", 
+            min_value=0.0, 
+            max_value=500.0, 
+            value=margen_actual, 
+            step=0.5,
+            help="Margen base predeterminado aplicable a los ítems de esta cotización"
+        )
+
+    with col_e3:
+        iva_actual = float(cot_info.get("porcentaje_iva", 19.0)) if pd.notna(cot_info.get("porcentaje_iva")) else 19.0
+        nuevo_iva = st.number_input("IVA Global (%)", min_value=0.0, max_value=100.0, value=iva_actual, step=1.0)
+
+    nuevas_obs = st.text_area(
+        "Observaciones / Términos", 
+        value=(cot_info["observaciones"] if pd.notna(cot_info["observaciones"]) else "")
+    )
+
+    if st.button("💾 Guardar Cambios de Encabezado", type="primary", use_container_width=True):
+        exito = actualizar_encabezado_cotizacion(
+            cotizacion_id=cot_id_sel,
+            tipo_cotizacion=nuevo_tipo,
+            numero_proceso=nuevo_proc,
+            margen_global=nuevo_margen,
+            porcentaje_iva=nuevo_iva,
+            observaciones=nuevas_obs.strip(),
+        )
+        if exito:
+            # Si hay ítems, sincronizamos el IVA global con aquellos que no son exentos
+            df_items = cargar_detalle_cotizacion(cot_id_sel)
+            if not df_items.empty and "tratamiento_iva" in df_items.columns:
+                mask_no_exento = df_items["tratamiento_iva"] != "Exento / Excluido (0%)"
+                if mask_no_exento.any():
+                    df_items.loc[mask_no_exento, "porcentaje_iva"] = nuevo_iva
+                    actualizar_items_y_cotizacion_db(cot_id_sel, df_items)
+
+            st.toast("✅ Encabezado e IVA global actualizados.", icon="🎉")
+            st.rerun()
+        else:
+            st.error("Error actualizando el encabezado en la base de datos.")
+
+# ==============================================================================
+# MODAL NATIVO: AGREGAR NUEVO ÍTEM
+# ==============================================================================
+# ==============================================================================
+@st.dialog("➕ Añadir Nuevo Ítem a la Cotización")
+def modal_agregar_item(cot_id_sel, cot_info):
+    desc_item = st.text_input("Descripción *")
+    
+    c1, c2 = st.columns(2)
+    with c1:
+        cant_item = st.number_input("Cantidad", min_value=0.01, value=1.00, step=1.00)
+    with c2:
+        unidad_item = st.text_input("Unidad", value="UNIDAD")
+
+    c3, c4 = st.columns(2)
+    with c3:
+        costo_item = st.number_input("Costo Unitario Ingresado (COP)", min_value=0.0, value=0.0, step=1000.0)
+    with c4:
+        enlace_item = st.text_input("Enlace / Proveedor (Opcional)")
+
+    if st.button("➕ Insertar Ítem en Cotización", type="primary", use_container_width=True):
+        if not desc_item.strip():
+            st.error("La descripción del ítem es obligatoria.")
+        else:
+            margen_predeterminado = float(cot_info.get("margen_global", 20.0)) if pd.notna(cot_info.get("margen_global")) else 20.0
+            iva_predeterminado = float(cot_info.get("porcentaje_iva", 19.0)) if pd.notna(cot_info.get("porcentaje_iva")) else 19.0
+            
+            exito = insertar_item_cotizacion(
+                cotizacion_id=cot_id_sel,
+                descripcion=desc_item.strip(),
+                cantidad=cant_item,
+                unidad=unidad_item.strip(),
+                costo_unitario=costo_item,
+                margen_aplicado=margen_predeterminado,
+                porcentaje_iva=iva_predeterminado,
+                tratamiento_iva="Con IVA Incluido",
+                enlace_proveedor=enlace_item.strip()
+            )
+            if exito:
+                st.toast("✅ Ítem agregado exitosamente.", icon="🎉")
+                st.rerun()
+                
 # ==============================================================================
 # VISTA 1: REGISTRO GENERAL MAESTRO
 # ==============================================================================
 def render_registro_general(df_cot):
-    """Muestra el catálogo completo de cotizaciones."""
     st.subheader("📊 Histórico y Control de Cotizaciones")
     st.caption("Consulta el catálogo general o haz clic en cualquier fila para abrir el editor completo.")
 
@@ -186,13 +308,11 @@ def render_registro_general(df_cot):
 
         if event and event.get("selection") and event["selection"].get("rows"):
             idx_sel = event["selection"]["rows"][0]
-            # Convertir explícitamente a int nativo
             cot_id_clic = int(df_filtrado.iloc[idx_sel]["id"]) 
             st.session_state["cot_id_activa"] = cot_id_clic
             st.rerun()
 
     except TypeError:
-        # Fallback para versiones previas
         opciones = {f"Cotización #{r['numero_cotizacion']} (ID: {r['id']})": r["id"] for _, r in df_filtrado.iterrows()}
         cot_sel = st.selectbox("Selecciona una cotización para abrir:", options=["-- Seleccionar --"] + list(opciones.keys()))
         if cot_sel != "-- Seleccionar --":
@@ -203,9 +323,7 @@ def render_registro_general(df_cot):
 # ==============================================================================
 # VISTA 2: EDITOR COMPLETO DE COTIZACIÓN (DETALLE)
 # ==============================================================================
-
 def render_card_html(label, value, badge_text=None, card_type="neutral"):
-    """Genera tarjetas compactas con sombreado de color para lectura rápida."""
     styles = {
         "neutral": "background: #1e222d; border: 1px solid #2d3345;",
         "green": "background: rgba(30, 70, 45, 0.45); border: 1px solid #2e7d32;",
@@ -233,7 +351,6 @@ def render_card_html(label, value, badge_text=None, card_type="neutral"):
     """
 
 def render_editor_cotizacion(cot_id_sel, df_cot):
-    """Entorno enfocado en la gestión individual con tarjetas de lectura rápida."""
     cot_id_sel = int(cot_id_sel)
     cot_match = df_cot[df_cot["id"] == cot_id_sel]
 
@@ -246,7 +363,6 @@ def render_editor_cotizacion(cot_id_sel, df_cot):
 
     cot_info = cot_match.iloc[0]
 
-    # --- OBTENER DATOS DEL PROCESO SECOP (PRESUPUESTO Y FECHA LÍMITE) ---
     presupuesto_oficial = 0.0
     fecha_limite_proc = None
     n_proc = (
@@ -263,7 +379,6 @@ def render_editor_cotizacion(cot_id_sel, df_cot):
             if pd.notna(row_lic.get("presupuesto")):
                 presupuesto_oficial = float(row_lic["presupuesto"])
 
-            # Extraer cualquier campo de fecha disponible en SECOP
             fecha_limite_proc = (
                 row_lic.get("fecha_limite")
                 or row_lic.get("fecha_cierre")
@@ -271,7 +386,6 @@ def render_editor_cotizacion(cot_id_sel, df_cot):
                 or row_lic.get("plazo_presentacion")
             )
 
-    # --- 1. CABECERA Y NAVEGACIÓN COMPACTA ---
     col_nav1, col_nav2 = st.columns([1, 2])
     with col_nav1:
         if st.button("⬅️ Volver al Registro", use_container_width=True):
@@ -294,7 +408,6 @@ def render_editor_cotizacion(cot_id_sel, df_cot):
             st.session_state["cot_id_activa"] = opciones_cambio[cot_rapida]
             st.rerun()
 
-    # Título con Badges y Plazo Justo Debajo (Limpio de indentación Markdown)
     badge_plazo_html = obtener_badge_plazo_html(fecha_limite_proc)
 
     html_header = (
@@ -310,54 +423,55 @@ def render_editor_cotizacion(cot_id_sel, df_cot):
 
     st.markdown(html_header, unsafe_allow_html=True)
 
-    # --- 2. CÁLCULOS DE MÉTRICAS ---
+    # --- CÁLCULO DINÁMICO ÍTEM POR ÍTEM DE SUBTOTAL, IVA Y TOTAL ---
     num_cot_actual = cot_info.get("numero_cotizacion")
     df_items = cargar_detalle_cotizacion(cot_id_sel, numero_cotizacion=num_cot_actual)
-    total_oferta = float(cot_info['total'] or 0.0)
-
-    if df_items.empty and total_oferta > 0:
-        st.warning(
-            f"⚠️ **Atención:** Esta cotización tiene un valor registrado de **${total_oferta:,.2f}**, "
-            f"pero no se hallaron renglones en `cotizacion_items` asociados al ID `{cot_id_sel}` o al número `{num_cot_actual}`."
-        )
 
     if not df_items.empty:
-        costo_total_acum = (
-            pd.to_numeric(df_items["costo_unitario"], errors="coerce").fillna(0.0)
-            * pd.to_numeric(df_items["cantidad"], errors="coerce").fillna(0.0)
-        ).sum()
+        df_items["cantidad"] = pd.to_numeric(df_items["cantidad"], errors="coerce").fillna(0.0)
+        df_items["costo_unitario"] = pd.to_numeric(df_items["costo_unitario"], errors="coerce").fillna(0.0)
+        df_items["margen_porcentaje"] = pd.to_numeric(df_items["margen_porcentaje"], errors="coerce").fillna(0.0)
+        
+        iva_hdr_def = float(cot_info.get("porcentaje_iva", 19.0)) if pd.notna(cot_info.get("porcentaje_iva")) else 19.0
 
-        margen_serie = pd.to_numeric(df_items["margen_porcentaje"], errors="coerce").fillna(0.0)
-        divisor_serie = (1.0 - (margen_serie / 100.0)).apply(lambda x: x if x > 0 else 1.0)
-        p_venta_serie = pd.to_numeric(df_items["costo_unitario"], errors="coerce").fillna(0.0) / divisor_serie
-        subtotal_venta = (p_venta_serie * pd.to_numeric(df_items["cantidad"], errors="coerce").fillna(0.0)).sum()
+        if "porcentaje_iva" not in df_items.columns:
+            df_items["porcentaje_iva"] = iva_hdr_def
+        else:
+            df_items["porcentaje_iva"] = pd.to_numeric(df_items["porcentaje_iva"], errors="coerce").fillna(iva_hdr_def)
+
+        if "tratamiento_iva" not in df_items.columns:
+            df_items["tratamiento_iva"] = "Con IVA Incluido"
+
+        costo_total_acum = (df_items["costo_unitario"] * df_items["cantidad"]).sum()
+
+        divisor_serie = (1.0 - (df_items["margen_porcentaje"] / 100.0)).apply(lambda x: x if x > 0 else 1.0)
+        p_venta_serie = df_items["costo_unitario"] / divisor_serie
+        subtotal_item_serie = p_venta_serie * df_items["cantidad"]
+        subtotal_venta = subtotal_item_serie.sum()
+
+        # Evaluación individual: si es exento o excluido el % IVA efectivo es 0.0
+        df_items["iva_pct_real"] = df_items.apply(
+            lambda r: 0.0 if str(r.get("tratamiento_iva")) == "Exento / Excluido (0%)" else float(r.get("porcentaje_iva", iva_hdr_def)),
+            axis=1
+        )
+
+        iva_total_acum = (subtotal_item_serie * (df_items["iva_pct_real"] / 100.0)).sum()
+        total_oferta = subtotal_venta + iva_total_acum
     else:
         costo_total_acum = 0.0
         subtotal_venta = float(cot_info["subtotal"] or 0.0)
+        iva_total_acum = float(cot_info["impuesto_iva"] or 0.0)
+        total_oferta = float(cot_info["total"] or 0.0)
 
     utilidad_bruta = subtotal_venta - costo_total_acum
     margen_global_pct = (utilidad_bruta / subtotal_venta * 100.0) if subtotal_venta > 0 else 0.0
-    
-    presupuesto_oficial = 0.0
-    n_proc = cot_info["numero_proceso"] if pd.notna(cot_info["numero_proceso"]) and cot_info["numero_proceso"] else "GENERAL"
 
-    if n_proc != "GENERAL":
-        df_lics = cargar_licitaciones()
-        lic_match = df_lics[df_lics["numero_proceso"] == n_proc]
-        if not lic_match.empty and pd.notna(lic_match.iloc[0].get("presupuesto")):
-            presupuesto_oficial = float(lic_match.iloc[0]["presupuesto"])
-
-    holgura_cop = presupuesto_oficial - total_oferta
-    pct_uso_presupuesto = (total_oferta / presupuesto_oficial * 100.0) if presupuesto_oficial > 0 else 0.0
-
-    # --- 3. RESUMEN FINANCIERO CON TARJETAS SOMBREADAS Y SEMAFORIZACIÓN ---
+    # --- 3. RESUMEN FINANCIERO Y COMPARATIVA SECOP ---
     st.markdown("##### 📈 Resumen Financiero y Comparativa SECOP")
     
-    # Evaluación de viabilidad contra el presupuesto oficial
     es_inviable = (total_oferta > presupuesto_oficial) if presupuesto_oficial > 0 else False
     diferencia = presupuesto_oficial - total_oferta
     monto_diferencia = abs(diferencia)
-    
     pct_desviacion = (monto_diferencia / presupuesto_oficial * 100.0) if presupuesto_oficial > 0 else 0.0
 
     if es_inviable:
@@ -371,7 +485,7 @@ def render_editor_cotizacion(cot_id_sel, df_cot):
         tipo_card_oferta = "green"
         badge_oferta = "✅ VIABLE (Dentro de Techo)" if presupuesto_oficial > 0 else None
 
-    # Fila 1: Datos Clave SECOP y Oferta
+    # Fila 1: SECOP y Total Oferta Dinámica
     r1_col1, r1_col2, r1_col3 = st.columns(3)
     with r1_col1:
         st.markdown(render_card_html("📋 Proceso / Licitación", str(n_proc), card_type="neutral"), unsafe_allow_html=True)
@@ -381,23 +495,21 @@ def render_editor_cotizacion(cot_id_sel, df_cot):
     with r1_col3:
         st.markdown(render_card_html("🚀 Total Oferta", f"${total_oferta:,.2f}", badge_text=badge_oferta, card_type=tipo_card_oferta), unsafe_allow_html=True)
 
-    # Banner de advertencia si se excede el techo
     if es_inviable:
         st.error(
             f"🚨 **OFERTA INVIABLE:** El Total de la Oferta (**\\${total_oferta:,.2f}**) "
             f"supera el Presupuesto Oficial (**\\${presupuesto_oficial:,.2f}**) "
-            f"por **\\${monto_diferencia:,.2f}** (+{pct_desviacion:.1f}%). "
-            f"En SECOP esta propuesta será descalificada automáticamente."
+            f"por **\\${monto_diferencia:,.2f}** (+{pct_desviacion:.1f}%)."
         )
 
-    # Fila 2: Desglose Monetario de Costos y Utilidad
+    # Fila 2: IVA Estimado Dinámico y Márgenes
     r2_col1, r2_col2, r2_col3, r2_col4 = st.columns(4)
     with r2_col1:
         st.markdown(render_card_html("📦 Costo Base Neto", f"${costo_total_acum:,.2f}", card_type="neutral"), unsafe_allow_html=True)
     with r2_col2:
         st.markdown(render_card_html("🏷️ Subtotal Venta", f"${subtotal_venta:,.2f}", card_type="neutral"), unsafe_allow_html=True)
     with r2_col3:
-        st.markdown(render_card_html("🏛️ IVA Estimado", f"${cot_info['impuesto_iva']:,.2f}", card_type="neutral"), unsafe_allow_html=True)
+        st.markdown(render_card_html("🏛️ IVA Estimado", f"${iva_total_acum:,.2f}", card_type="neutral"), unsafe_allow_html=True)
     with r2_col4:
         badge_ub = f"↑ {margen_global_pct:.2f}% Margen Real"
         st.markdown(render_card_html("💰 Utilidad Bruta", f"${utilidad_bruta:,.2f}", badge_text=badge_ub, card_type="green"), unsafe_allow_html=True)
@@ -415,25 +527,8 @@ def render_editor_cotizacion(cot_id_sel, df_cot):
             st.success(f"Estado actualizado a {nuevo_estado}")
             st.rerun()
 
-        with st.popover("✏️ Editar Encabezado", use_container_width=True):
-            with st.form(f"form_edit_cot_{cot_id_sel}"):
-                tipos = ["GENERAL", "LICITACION_SECOP", "VENTA_DIRECTA"]
-                tipo_actual = cot_info["tipo_cotizacion"] if pd.notna(cot_info["tipo_cotizacion"]) else "GENERAL"
-                idx_tipo = tipos.index(tipo_actual) if tipo_actual in tipos else 0
-
-                nuevo_tipo = st.selectbox("Tipo Cotización", tipos, index=idx_tipo)
-                nuevo_proc = st.text_input("Número Proceso", value=(cot_info["numero_proceso"] if pd.notna(cot_info["numero_proceso"]) else ""))
-                nuevas_obs = st.text_area("Observaciones", value=(cot_info["observaciones"] if pd.notna(cot_info["observaciones"]) else ""))
-
-                if st.form_submit_button("💾 Guardar Cambios", type="primary", use_container_width=True):
-                    actualizar_encabezado_cotizacion(
-                        cotizacion_id=cot_id_sel,
-                        tipo_cotizacion=nuevo_tipo,
-                        numero_proceso=nuevo_proc,
-                        observaciones=nuevas_obs,
-                    )
-                    st.success("Encabezado actualizado correctamente.")
-                    st.rerun()
+        if st.button("✏️ Editar Encabezado", use_container_width=True, key=f"btn_edit_enc_{cot_id_sel}"):
+            modal_editar_encabezado(cot_info, cot_id_sel)
 
     with act_col2:
         excel_bytes = generar_excel_cotizacion(cot_info.to_dict(), df_items)
@@ -457,6 +552,8 @@ def render_editor_cotizacion(cot_id_sel, df_cot):
     # --- 5. TABLA DE ÍTEMS ---
     st.markdown(f"#### 📦 Ítems Incluidos ({len(df_items)} ítems)")
     st.caption("💡 **Tip:** Haz clic sobre cualquier fila para abrir la Calculadora y Editar el Ítem.")
+
+    idx_seleccionado = None
 
     if not df_items.empty:
         columnas_visibles = [
@@ -488,108 +585,28 @@ def render_editor_cotizacion(cot_id_sel, df_cot):
             },
         )
 
+        # Guardamos la selección sin abrir el modal de forma inmediata
         if event and event.get("selection") and event["selection"].get("rows"):
             idx_seleccionado = event["selection"]["rows"][0]
-            item_row = df_items.iloc[idx_seleccionado]
-            modal_editar_item(cot_id_sel, item_row, df_items)
     else:
         st.info("Esta cotización aún no contiene ítems asociados.")
 
     st.markdown("---")
 
-    # --- 6. FORMULARIO PARA AÑADIR ÍTEMS ---
-    # Inicializar la versión de las claves del formulario si no existe
-    if f"form_ver_{cot_id_sel}" not in st.session_state:
-        st.session_state[f"form_ver_{cot_id_sel}"] = 0
+    # --- 6. BOTÓN Y CONTROL DE MODALES (AÑADIR VS. EDITAR) ---
+    btn_agregar = st.button("➕ Añadir nuevo ítem a esta cotización", use_container_width=True, type="primary")
 
-    form_ver = st.session_state[f"form_ver_{cot_id_sel}"]
-
-    with st.expander("➕ Añadir nuevo ítem a esta cotización", expanded=False):
-        col_i1, col_i2, col_i3 = st.columns([3, 1, 1])
-        with col_i1:
-            desc_item = st.text_input("Descripción *", key=f"add_desc_{cot_id_sel}_{form_ver}")
-        with col_i2:
-            cant_item = st.number_input("Cantidad", min_value=1.0, value=1.0, key=f"add_cant_{cot_id_sel}_{form_ver}")
-        with col_i3:
-            unid_item = st.text_input("Unidad", value="UNIDAD", key=f"add_unid_{cot_id_sel}_{form_ver}")
-
-        col_c1, col_c2 = st.columns(2)
-        with col_c1:
-            costo_ingresado = st.number_input("Costo Unitario Ingresado (COP)", min_value=0.0, step=1000.0, key=f"add_costo_{cot_id_sel}_{form_ver}")
-            modo_iva = st.selectbox(
-                "Tratamiento de IVA del Costo",
-                options=["Con IVA Incluido", "Sin IVA (Antes de IVA)", "Exento / Excluido (0%)"],
-                index=0,
-                key=f"add_modo_iva_{cot_id_sel}_{form_ver}",
-            )
-        with col_c2:
-            iva_disabled = modo_iva == "Exento / Excluido (0%)"
-            tarifa_iva = st.number_input(
-                "% IVA",
-                min_value=0.0,
-                max_value=100.0,
-                value=0.0 if iva_disabled else 19.0,
-                disabled=iva_disabled,
-                key=f"add_tarifa_iva_{cot_id_sel}_{form_ver}",
-            )
-            margen_add_label = st.selectbox(
-                "Margen Aplicado",
-                options=list(OPCIONES_MARGEN.keys()),
-                index=4,
-                key=f"add_margen_sel_{cot_id_sel}_{form_ver}",
-            )
-
-        enlace_item = st.text_input("Enlace / Proveedor (Opcional)", key=f"add_link_{cot_id_sel}_{form_ver}")
-
-        # Cálculos del ítem en tiempo real
-        if modo_iva == "Con IVA Incluido" and tarifa_iva > 0:
-            costo_base = costo_ingresado / (1 + (tarifa_iva / 100.0))
-        else:
-            costo_base = costo_ingresado
-
-        margen_add_dec = OPCIONES_MARGEN[margen_add_label]
-        factor_item = 1.0 - margen_add_dec
-        p_venta = costo_base / factor_item if factor_item > 0 else costo_base
-        subt_item = p_venta * cant_item
-
-        if costo_ingresado > 0:
-            st.info(
-                f"💡 **Desglose del Ítem:** Costo Base: **${costo_base:,.2f}** | "
-                f"Divisor: **÷ {factor_item:.2f}** ({margen_add_dec*100:.0f}% Margen) | "
-                f"P. Venta: **${p_venta:,.2f}** | Subtotal: **${subt_item:,.2f}**"
-            )
-
-        if st.button("➕ Insertar Ítem en Cotización", use_container_width=True, type="primary", key=f"btn_add_item_{cot_id_sel}_{form_ver}"):
-            if not desc_item.strip():
-                st.error("La descripción del ítem no puede estar vacía.")
-            else:
-                exito = agregar_item_a_cotizacion_existente(
-                    cot_id_sel,
-                    {
-                        "descripcion": desc_item.strip(),
-                        "cantidad": cant_item,
-                        "unidad_medida": unid_item.strip(),
-                        "costo_unitario": costo_base,
-                        "margen_porcentaje": margen_add_dec * 100.0,
-                        "precio_venta_unitario": p_venta,
-                        "subtotal_item": subt_item,
-                        "enlace_referencia": enlace_item.strip(),
-                    },
-                )
-                if exito:
-                    # 1. Notificación flotante que se desaparece sola en 4 segundos
-                    st.toast("✅ Ítem agregado y totales recalculados.", icon="🎉")
-                    
-                    # 2. Incrementar la versión para forzar el reinicio limpio del formulario
-                    st.session_state[f"form_ver_{cot_id_sel}"] += 1
-                    
-                    st.rerun()
+    # Exclusión mutua: Streamlit solo permite ejecutar un @st.dialog por renderizado
+    if btn_agregar:
+        modal_agregar_item(cot_id_sel, cot_info)
+    elif idx_seleccionado is not None:
+        item_row = df_items.iloc[idx_seleccionado]
+        modal_editar_item(cot_id_sel, item_row, df_items)
 
 # ==============================================================================
-# ENTRADA PRINCIPAL DEL MÓDULO (ENRUTADOR DE VISTAS)
+# ENTRADA PRINCIPAL Y HELPERS
 # ==============================================================================
 def render_tab_historico():
-    """Conecta dinámicamente el Registro General con el Editor de Cotización."""
     df_cot = cargar_cotizaciones()
 
     if df_cot.empty:
@@ -597,11 +614,9 @@ def render_tab_historico():
         st.info("No hay cotizaciones registradas en la base de datos.")
         return
 
-    # Si hay una cotización activa en session_state, renderizamos la Vista Editor
     if "cot_id_activa" in st.session_state and st.session_state["cot_id_activa"]:
         render_editor_cotizacion(st.session_state["cot_id_activa"], df_cot)
     else:
-        # De lo contrario, renderizamos la Vista Registro General
         render_registro_general(df_cot)
 
 def render_resumen_financiero_secop(
@@ -756,21 +771,14 @@ def obtener_badge_plazo(fecha_limite_str):
         return f"📅 **Plazo:** {fecha_limite_str}"
 
 def obtener_badge_plazo_html(fecha_limite_val):
-    """Devuelve un badge HTML semaforizado con el estado del plazo (Vencido, Por Vencer o Vigente)."""
     if not fecha_limite_val or pd.isna(fecha_limite_val):
         return '<span style="color: #a0a6b5; font-size: 0.85rem;">📅 <strong>Plazo:</strong> Sin fecha registrada</span>'
 
     dt_limite = None
-
     if isinstance(fecha_limite_val, (datetime.datetime, pd.Timestamp)):
         dt_limite = fecha_limite_val
     elif isinstance(fecha_limite_val, str):
-        formatos = [
-            "%Y-%m-%d %H:%M:%S",
-            "%Y-%m-%dT%H:%M:%S",
-            "%d/%m/%Y %H:%M:%S",
-            "%Y-%m-%d",
-        ]
+        formatos = ["%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%d/%m/%Y %H:%M:%S", "%Y-%m-%d"]
         for fmt in formatos:
             try:
                 dt_limite = datetime.datetime.strptime(fecha_limite_val.strip(), fmt)
@@ -786,13 +794,10 @@ def obtener_badge_plazo_html(fecha_limite_val):
     str_fecha_fmt = dt_limite.strftime("%d/%m/%Y %H:%M:%S")
 
     if diferencia.total_seconds() < 0:
-        # VENCIDO (ROJO)
         abs_diff = abs(diferencia)
         dias = abs_diff.days
         horas = abs_diff.seconds // 3600
-        minutos = (abs_diff.seconds % 3600) // 60
-        tiempo_str = f"{dias} días {horas} h" if dias > 0 else f"{horas} h {minutos} min"
-
+        tiempo_str = f"{dias} días {horas} h" if dias > 0 else f"{horas} h"
         return (
             f'<div style="display: inline-flex; align-items: center; background: rgba(211, 47, 47, 0.2); border: 1px solid #d32f2f; border-radius: 6px; padding: 4px 10px;">'
             f'<span style="color: #ef5350; font-size: 0.85rem; font-weight: 600;">'
@@ -800,23 +805,9 @@ def obtener_badge_plazo_html(fecha_limite_val):
             f'<span style="margin-left: 6px; background: #d32f2f; color: #ffffff; padding: 1px 6px; border-radius: 4px; font-size: 0.75rem;">Vencido ({tiempo_str})</span>'
             f'</span></div>'
         )
-    elif diferencia.total_seconds() <= 86400:
-        # POR VENCER EN MENOS DE 24 HORAS (NARANJA)
-        horas = diferencia.seconds // 3600
-        minutos = (diferencia.seconds % 3600) // 60
-
-        return (
-            f'<div style="display: inline-flex; align-items: center; background: rgba(255, 152, 0, 0.2); border: 1px solid #ff9800; border-radius: 6px; padding: 4px 10px;">'
-            f'<span style="color: #ffb74d; font-size: 0.85rem; font-weight: 600;">'
-            f'⚠️ <strong>Plazo:</strong> {str_fecha_fmt} '
-            f'<span style="margin-left: 6px; background: #ff9800; color: #000000; padding: 1px 6px; border-radius: 4px; font-size: 0.75rem;">¡Vence Hoy! (Quedan {horas} h {minutos} min)</span>'
-            f'</span></div>'
-        )
     else:
-        # VIGENTE (VERDE)
         dias = diferencia.days
         horas = diferencia.seconds // 3600
-
         return (
             f'<div style="display: inline-flex; align-items: center; background: rgba(46, 125, 50, 0.2); border: 1px solid #2e7d32; border-radius: 6px; padding: 4px 10px;">'
             f'<span style="color: #81c784; font-size: 0.85rem; font-weight: 600;">'

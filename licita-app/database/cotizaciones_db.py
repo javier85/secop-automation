@@ -300,8 +300,10 @@ def actualizar_encabezado_cotizacion(
     numero_proceso: str = None,
     observaciones: str = None,
     estado: str = None,
+    margen_global: float = None,
+    porcentaje_iva: float = None,
 ) -> bool:
-    """Actualiza el tipo, número de proceso, observaciones y/o estado de una cotización."""
+    """Actualiza el tipo, número de proceso, observaciones, estado y/o margen global de una cotización."""
     fields = []
     params = []
 
@@ -310,13 +312,19 @@ def actualizar_encabezado_cotizacion(
         params.append(tipo_cotizacion)
     if numero_proceso is not None:
         fields.append("numero_proceso = %s")
-        params.append(numero_proceso if numero_proceso.strip() else None)
+        params.append(numero_proceso.strip() if numero_proceso.strip() else None)
     if observaciones is not None:
         fields.append("observaciones = %s")
         params.append(observaciones)
     if estado is not None:
         fields.append("estado = %s")
         params.append(estado)
+    if margen_global is not None:
+        fields.append("margen_global = %s")
+        params.append(margen_global)
+    if porcentaje_iva is not None:
+        fields.append("porcentaje_iva = %s")
+        params.append(porcentaje_iva)
 
     if not fields:
         return True
@@ -419,31 +427,49 @@ def cargar_items_por_cotizacion(cotizacion_id: int) -> pd.DataFrame:
         return pd.DataFrame()
 
 # Alias y funciones de compatibilidad para las vistas
-def cargar_detalle_cotizacion(cotizacion_id, numero_cotizacion=None):
-    """Carga los ítems de la cotización asegurando tipos de datos nativos de Python."""
-    # Convertir cotizacion_id de numpy.int64 a int nativo de Python
+def cargar_detalle_cotizacion(cotizacion_id: int, numero_cotizacion=None) -> pd.DataFrame:
+    """Carga los ítems de la cotización asegurando coerción de tipos nativos
+
+    y resolución relacional mediante JOIN para búsquedas por número de cotización.
+    """
     try:
         cotizacion_id_native = int(cotizacion_id) if cotizacion_id is not None else None
     except (ValueError, TypeError):
         cotizacion_id_native = cotizacion_id
 
-    query_id = "SELECT * FROM cotizacion_items WHERE cotizacion_id = %s ORDER BY id ASC;"
+    query_id = """
+        SELECT ci.* 
+        FROM cotizacion_items ci 
+        WHERE ci.cotizacion_id = %s 
+        ORDER BY ci.numero_item ASC, ci.id ASC;
+    """
     
+    query_num = """
+        SELECT ci.* 
+        FROM cotizacion_items ci
+        JOIN cotizaciones c ON ci.cotizacion_id = c.id
+        WHERE c.id = %s OR c.numero_cotizacion = %s
+        ORDER BY ci.numero_item ASC, ci.id ASC;
+    """
+
     try:
         with get_db_connection() as conn:
-            # 1. Intentar por ID entero nativo
-            df = pd.read_sql(query_id, conn, params=(cotizacion_id_native,))
-            
-            # 2. Fallback por número de cotización si no se encontraron ítems
+            if cotizacion_id_native is not None:
+                df = pd.read_sql(query_id, conn, params=(cotizacion_id_native,))
+            else:
+                df = pd.DataFrame()
+
             if df.empty and numero_cotizacion:
-                query_num = "SELECT * FROM cotizacion_items WHERE cotizacion_id = %s OR numero_cotizacion = %s ORDER BY id ASC;"
-                df = pd.read_sql(query_num, conn, params=(str(cotizacion_id_native), str(numero_cotizacion)))
+                df = pd.read_sql(
+                    query_num, 
+                    conn, 
+                    params=(cotizacion_id_native, str(numero_cotizacion))
+                )
                 
             return df
     except Exception as e:
         st.error(f"Error cargando detalle de cotización: {e}")
         return pd.DataFrame()
-
 
 def eliminar_cotizacion_completa(cotizacion_id: int) -> bool:
     """Elimina una cotización y sus ítems (alias para tab_historico.py)."""
@@ -540,30 +566,34 @@ def guardar_items_masivos_db(df_items: pd.DataFrame) -> tuple[bool, str]:
         return False, str(e)
 
 def actualizar_items_y_cotizacion_db(cotizacion_id: int, df_items: pd.DataFrame) -> bool:
-    """Reemplaza los ítems de una cotización y recalcula Subtotal, IVA y Total en PostgreSQL."""
+    """Reemplaza los ítems de una cotización con IVA por ítem y recalcula Subtotal, IVA y Total."""
     sql_delete = "DELETE FROM cotizacion_items WHERE cotizacion_id = %s;"
     sql_insert = """
         INSERT INTO cotizacion_items (
             cotizacion_id, numero_item, descripcion, cantidad,
             unidad_medida, costo_unitario, margen_porcentaje,
-            precio_venta_unitario, subtotal_item, enlace_referencia
-        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s);
+            precio_venta_unitario, subtotal_item, porcentaje_iva,
+            tratamiento_iva, enlace_referencia
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);
     """
     sql_recalcular = """
         WITH totales AS (
             SELECT 
                 COALESCE(SUM(subtotal_item), 0.0) AS nuevo_subtotal,
-                porcentaje_iva
-            FROM cotizaciones c
-            LEFT JOIN cotizacion_items ci ON c.id = ci.cotizacion_id
-            WHERE c.id = %s
-            GROUP BY c.id, c.porcentaje_iva
+                COALESCE(SUM(
+                    CASE 
+                        WHEN tratamiento_iva = %s THEN 0.0
+                        ELSE subtotal_item * (COALESCE(porcentaje_iva, 19.0) / 100.0)
+                    END
+                ), 0.0) AS nuevo_iva
+            FROM cotizacion_items
+            WHERE cotizacion_id = %s
         )
         UPDATE cotizaciones
         SET 
             subtotal = totales.nuevo_subtotal,
-            impuesto_iva = totales.nuevo_subtotal * (COALESCE(totales.porcentaje_iva, 0.0) / 100.0),
-            total = totales.nuevo_subtotal * (1 + (COALESCE(totales.porcentaje_iva, 0.0) / 100.0))
+            impuesto_iva = totales.nuevo_iva,
+            total = totales.nuevo_subtotal + totales.nuevo_iva
         FROM totales
         WHERE cotizaciones.id = %s;
     """
@@ -576,8 +606,14 @@ def actualizar_items_y_cotizacion_db(cotizacion_id: int, df_items: pd.DataFrame)
                     cant = float(row.get("cantidad", 0.0) or 0.0)
                     costo = float(row.get("costo_unitario", 0.0) or 0.0)
                     margen = float(row.get("margen_porcentaje", 0.0) or 0.0)
-                    p_venta = costo * (1 + (margen / 100.0))
+                    
+                    margen_dec = margen / 100.0
+                    f_divisor = 1.0 - margen_dec
+                    p_venta = costo / f_divisor if f_divisor > 0 else costo
                     subtotal = cant * p_venta
+
+                    p_iva = float(row.get("porcentaje_iva", 19.0) or 19.0)
+                    t_iva = str(row.get("tratamiento_iva", "Con IVA Incluido") or "Con IVA Incluido").strip()
 
                     cur.execute(
                         sql_insert,
@@ -591,13 +627,167 @@ def actualizar_items_y_cotizacion_db(cotizacion_id: int, df_items: pd.DataFrame)
                             margen,
                             p_venta,
                             subtotal,
+                            p_iva,
+                            t_iva,
                             str(row.get("enlace_referencia", "") or "").strip(),
                         ),
                     )
 
-                cur.execute(sql_recalcular, (cotizacion_id, cotizacion_id))
+                # Se pasan exactamente los 3 parámetros para los 3 marcadores %s
+                cur.execute(sql_recalcular, ("Exento / Excluido (0%)", cotizacion_id, cotizacion_id))
             conn.commit()
         return True
     except Exception as e:
         st.error(f"Error al actualizar ítems en la base de datos: {e}")
+        return False
+
+def insertar_item_cotizacion(
+    cotizacion_id: int,
+    descripcion: str,
+    cantidad: float,
+    unidad: str,
+    costo_unitario: float,
+    margen_aplicado: float,
+    porcentaje_iva: float,
+    tratamiento_iva: str = "Con IVA Incluido",
+    enlace_proveedor: str = ""
+) -> bool:
+    """Inserta un ítem incluyendo IVA por renglón y recalcula totales en cotizaciones."""
+    margen_dec = margen_aplicado / 100.0
+    f_divisor = 1.0 - margen_dec
+    precio_venta_unitario = costo_unitario / f_divisor if f_divisor > 0 else costo_unitario
+    subtotal_item = precio_venta_unitario * cantidad
+
+    sql_max_item = "SELECT COALESCE(MAX(numero_item), 0) + 1 FROM cotizacion_items WHERE cotizacion_id = %s;"
+
+    sql_insert = """
+        INSERT INTO cotizacion_items (
+            cotizacion_id, numero_item, descripcion, cantidad,
+            unidad_medida, costo_unitario, margen_porcentaje,
+            precio_venta_unitario, subtotal_item, porcentaje_iva,
+            tratamiento_iva, enlace_referencia
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);
+    """
+
+    sql_recalcular = """
+        WITH totales AS (
+            SELECT 
+                COALESCE(SUM(subtotal_item), 0.0) AS nuevo_subtotal,
+                COALESCE(SUM(
+                    CASE 
+                        WHEN tratamiento_iva = %s THEN 0.0
+                        ELSE subtotal_item * (COALESCE(porcentaje_iva, 19.0) / 100.0)
+                    END
+                ), 0.0) AS nuevo_iva
+            FROM cotizacion_items
+            WHERE cotizacion_id = %s
+        )
+        UPDATE cotizaciones
+        SET 
+            subtotal = totales.nuevo_subtotal,
+            impuesto_iva = totales.nuevo_iva,
+            total = totales.nuevo_subtotal + totales.nuevo_iva
+        FROM totales
+        WHERE cotizaciones.id = %s;
+    """
+
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql_max_item, (cotizacion_id,))
+                num_item = cur.fetchone()[0]
+
+                cur.execute(
+                    sql_insert,
+                    (
+                        cotizacion_id,
+                        num_item,
+                        descripcion,
+                        cantidad,
+                        unidad,
+                        costo_unitario,
+                        margen_aplicado,
+                        precio_venta_unitario,
+                        subtotal_item,
+                        porcentaje_iva,
+                        tratamiento_iva,
+                        enlace_proveedor,
+                    ),
+                )
+                cur.execute(sql_recalcular, ("Exento / Excluido (0%)", cotizacion_id, cotizacion_id))
+            conn.commit()
+        return True
+    except Exception as e:
+        st.error(f"Error insertando ítem en la cotización: {e}")
+        return False
+
+def actualizar_parametros_globales_db(
+    cotizacion_id: int, 
+    nuevo_margen: float, 
+    nuevo_iva: float, 
+    observaciones: str = None
+) -> bool:
+    """
+    Actualiza el margen e IVA global de la cotización Y fuerza a que 
+    todos los ítems individuales adopten el nuevo IVA.
+    """
+    tratamiento_iva = "Exento / Excluido (0%)" if nuevo_iva == 0.0 else "Con IVA Incluido"
+
+    # Actualiza el IVA y su tratamiento en TODOS los ítems de esta cotización
+    sql_update_items = """
+        UPDATE cotizacion_items
+        SET porcentaje_iva = %s,
+            tratamiento_iva = %s
+        WHERE cotizacion_id = %s;
+    """
+
+    # Recalcula subtotal, IVA total y Total general de la cotización
+    sql_recalcular_cotizacion = """
+        WITH totales AS (
+            SELECT 
+                COALESCE(SUM(subtotal_item), 0.0) AS nuevo_subtotal,
+                COALESCE(SUM(
+                    CASE 
+                        WHEN %s = 0.0 THEN 0.0
+                        ELSE subtotal_item * (%s / 100.0)
+                    END
+                ), 0.0) AS nuevo_iva
+            FROM cotizacion_items
+            WHERE cotizacion_id = %s
+        )
+        UPDATE cotizaciones
+        SET 
+            margen_base = %s,
+            porcentaje_iva_global = %s,
+            observaciones = %s,
+            subtotal = totales.nuevo_subtotal,
+            impuesto_iva = totales.nuevo_iva,
+            total = totales.nuevo_subtotal + totales.nuevo_iva
+        FROM totales
+        WHERE cotizaciones.id = %s;
+    """
+
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                # 1. Aplicar nuevo IVA masivamente a cada renglón
+                cur.execute(sql_update_items, (nuevo_iva, tratamiento_iva, cotizacion_id))
+                
+                # 2. Recalcular totales generales
+                cur.execute(
+                    sql_recalcular_cotizacion,
+                    (
+                        nuevo_iva, 
+                        nuevo_iva, 
+                        cotizacion_id, 
+                        nuevo_margen, 
+                        nuevo_iva, 
+                        observaciones, 
+                        cotizacion_id
+                    )
+                )
+            conn.commit()
+        return True
+    except Exception as e:
+        st.error(f"Error al aplicar IVA global a los ítems: {e}")
         return False
