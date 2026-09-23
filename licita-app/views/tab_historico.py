@@ -22,9 +22,9 @@ OPCIONES_MARGEN = {
 }
 
 # ==============================================================================
-# MODAL NATIVO: CALCULADORA Y EDICIÓN AVANZADA DE ÍTEM
+# MODAL NATIVO: CALCULADORA Y EDICIÓN AVANZADA DE ÍTEM (ANCHO ESTÁNDAR)
 # ==============================================================================
-@st.dialog("🛠️ Calculadora y Edición Avanzada de Ítem")
+@st.dialog("🛠️ Calculadora y Edición de Ítem")
 def modal_editar_item(cot_id_sel, item_row, df_items):
     item_id_edit = item_row["id"]
 
@@ -56,7 +56,7 @@ def modal_editar_item(cot_id_sel, item_row, df_items):
     modo_actual = str(item_row.get("tratamiento_iva", "Con IVA Incluido"))
     idx_modo = opciones_modo_iva.index(modo_actual) if modo_actual in opciones_modo_iva else 0
 
-    col_mc3, col_mc4, col_mc5 = st.columns([2, 2, 2.5])
+    col_mc3, col_mc4 = st.columns(2)
     with col_mc3:
         edit_costo_ingresado = st.number_input(
             "Costo Unitario (COP) *",
@@ -70,17 +70,17 @@ def modal_editar_item(cot_id_sel, item_row, df_items):
             options=opciones_modo_iva,
             index=idx_modo,
         )
-    with col_mc5:
-        iva_dis = edit_modo_iva == "Exento / Excluido (0%)"
-        iva_previo = float(item_row.get("porcentaje_iva", 19.0))
-        
-        edit_tarifa_iva = st.number_input(
-            "% IVA Ítem",
-            min_value=0.0,
-            max_value=100.0,
-            value=0.0 if iva_dis else (iva_previo if iva_previo > 0 else 19.0),
-            disabled=iva_dis,
-        )
+
+    iva_dis = edit_modo_iva == "Exento / Excluido (0%)"
+    iva_previo = float(item_row.get("porcentaje_iva", 19.0))
+    
+    edit_tarifa_iva = st.number_input(
+        "% IVA Ítem",
+        min_value=0.0,
+        max_value=100.0,
+        value=0.0 if iva_dis else (iva_previo if iva_previo > 0 else 19.0),
+        disabled=iva_dis,
+    )
 
     # Determinación estricta de la tarifa de IVA según exención
     edit_tarifa_iva_final = 0.0 if iva_dis else edit_tarifa_iva
@@ -146,7 +146,7 @@ def modal_editar_item(cot_id_sel, item_row, df_items):
             st.error("Error al guardar en la base de datos.")
 
 # ==============================================================================
-# MODAL NATIVO: EDICIÓN DE ENCABEZADO Y PARÁMETROS GLOBALES
+# MODAL NATIVO: EDICIÓN DE ENCABEZADO Y PARÁMETROS GLOBALES (ANCHO ESTÁNDAR)
 # ==============================================================================
 @st.dialog("📄 Modificar Parámetros Globales")
 def modal_editar_encabezado(cot_info, cot_id_sel):
@@ -202,7 +202,6 @@ def modal_editar_encabezado(cot_info, cot_id_sel):
             observaciones=nuevas_obs.strip(),
         )
         if exito:
-            # Si hay ítems, sincronizamos el IVA global con aquellos que no son exentos
             df_items = cargar_detalle_cotizacion(cot_id_sel)
             if not df_items.empty and "tratamiento_iva" in df_items.columns:
                 mask_no_exento = df_items["tratamiento_iva"] != "Exento / Excluido (0%)"
@@ -216,8 +215,7 @@ def modal_editar_encabezado(cot_info, cot_id_sel):
             st.error("Error actualizando el encabezado en la base de datos.")
 
 # ==============================================================================
-# MODAL NATIVO: AGREGAR NUEVO ÍTEM
-# ==============================================================================
+# MODAL NATIVO: AGREGAR NUEVO ÍTEM (ANCHO ESTÁNDAR)
 # ==============================================================================
 @st.dialog("➕ Añadir Nuevo Ítem a la Cotización")
 def modal_agregar_item(cot_id_sel, cot_info):
@@ -256,7 +254,7 @@ def modal_agregar_item(cot_id_sel, cot_info):
             if exito:
                 st.toast("✅ Ítem agregado exitosamente.", icon="🎉")
                 st.rerun()
-                
+
 # ==============================================================================
 # VISTA 1: REGISTRO GENERAL MAESTRO
 # ==============================================================================
@@ -319,9 +317,8 @@ def render_registro_general(df_cot):
             st.session_state["cot_id_activa"] = opciones[cot_sel]
             st.rerun()
 
-
 # ==============================================================================
-# VISTA 2: EDITOR COMPLETO DE COTIZACIÓN (DETALLE)
+# VISTA 2: EDITOR COMPLETO DE COTIZACIÓN (REORGANIZADO)
 # ==============================================================================
 def render_card_html(label, value, badge_text=None, card_type="neutral"):
     styles = {
@@ -386,11 +383,16 @@ def render_editor_cotizacion(cot_id_sel, df_cot):
                 or row_lic.get("plazo_presentacion")
             )
 
-    col_nav1, col_nav2 = st.columns([1, 2])
+    # ==========================================
+    # 1. BARRA DE NAVEGACIÓN SUPERIOR Y ENCABEZADO
+    # ==========================================
+    col_nav1, col_nav2 = st.columns([1, 1])
+
     with col_nav1:
-        if st.button("⬅️ Volver al Registro", use_container_width=True):
+        if st.button("⬅️ Volver al Registro", use_container_width=True, key=f"btn_back_{cot_id_sel}"):
             st.session_state.pop("cot_id_activa", None)
             st.rerun()
+
     with col_nav2:
         opciones_cambio = {
             f"#{r['numero_cotizacion']} ({r['estado']})": int(r["id"])
@@ -408,10 +410,11 @@ def render_editor_cotizacion(cot_id_sel, df_cot):
             st.session_state["cot_id_activa"] = opciones_cambio[cot_rapida]
             st.rerun()
 
+    # Encabezado HTML con estado y plazo
     badge_plazo_html = obtener_badge_plazo_html(fecha_limite_proc)
 
     html_header = (
-        f'<div style="margin-top: 10px; margin-bottom: 10px;">'
+        f'<div style="margin-top: 10px; margin-bottom: 15px;">'
         f'<div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">'
         f'<h2 style="margin: 0; font-size: 1.4rem; font-weight: 700; color: #FFFFFF;">🛠️ Cotización #{cot_info["numero_cotizacion"]}</h2>'
         f'<span style="background: #1b2e1e; color: #66bb6a; border: 1px solid #2e7d32; padding: 2px 10px; border-radius: 12px; font-size: 0.75rem; font-weight: 700;">{cot_info["estado"]}</span>'
@@ -420,10 +423,9 @@ def render_editor_cotizacion(cot_id_sel, df_cot):
         f'<div style="margin-top: 8px;">{badge_plazo_html}</div>'
         f'</div>'
     )
-
     st.markdown(html_header, unsafe_allow_html=True)
 
-    # --- CÁLCULO DINÁMICO ÍTEM POR ÍTEM DE SUBTOTAL, IVA Y TOTAL ---
+    # 2. CÁLCULO DINÁMICO DE TOTALES
     num_cot_actual = cot_info.get("numero_cotizacion")
     df_items = cargar_detalle_cotizacion(cot_id_sel, numero_cotizacion=num_cot_actual)
 
@@ -449,7 +451,6 @@ def render_editor_cotizacion(cot_id_sel, df_cot):
         subtotal_item_serie = p_venta_serie * df_items["cantidad"]
         subtotal_venta = subtotal_item_serie.sum()
 
-        # Evaluación individual: si es exento o excluido el % IVA efectivo es 0.0
         df_items["iva_pct_real"] = df_items.apply(
             lambda r: 0.0 if str(r.get("tratamiento_iva")) == "Exento / Excluido (0%)" else float(r.get("porcentaje_iva", iva_hdr_def)),
             axis=1
@@ -466,9 +467,11 @@ def render_editor_cotizacion(cot_id_sel, df_cot):
     utilidad_bruta = subtotal_venta - costo_total_acum
     margen_global_pct = (utilidad_bruta / subtotal_venta * 100.0) if subtotal_venta > 0 else 0.0
 
-    # --- 3. RESUMEN FINANCIERO Y COMPARATIVA SECOP ---
+    # ==========================================
+    # 3. RESUMEN FINANCIERO Y COMPARATIVA SECOP
+    # ==========================================
     st.markdown("##### 📈 Resumen Financiero y Comparativa SECOP")
-    
+
     es_inviable = (total_oferta > presupuesto_oficial) if presupuesto_oficial > 0 else False
     diferencia = presupuesto_oficial - total_oferta
     monto_diferencia = abs(diferencia)
@@ -480,57 +483,215 @@ def render_editor_cotizacion(cot_id_sel, df_cot):
         tipo_card_oferta = "red"
         badge_oferta = "🚨 INVIABLE (Supera Techo)"
     else:
-        badge_po = f"↑ +${diferencia:,.2f} Holgura (-{pct_desviacion:.1f}%)" if presupuesto_oficial > 0 else None
+        badge_po = f"↑ +${diferencia:,.2f} Holgura (-{pct_desviacion:.1f}%)" if presupuesto_oficial > 0 else "📌 Sin Techo Oficial"
         tipo_card_po = "blue"
         tipo_card_oferta = "green"
-        badge_oferta = "✅ VIABLE (Dentro de Techo)" if presupuesto_oficial > 0 else None
+        badge_oferta = "✅ VIABLE (Dentro de Techo)" if presupuesto_oficial > 0 else "ℹ️ Sin Límite Definido"
 
-    # Fila 1: SECOP y Total Oferta Dinámica
+    # FILA 1 DE TARJETAS (Comparativa SECOP - 3 Columnas)
     r1_col1, r1_col2, r1_col3 = st.columns(3)
-    with r1_col1:
-        st.markdown(render_card_html("📋 Proceso / Licitación", str(n_proc), card_type="neutral"), unsafe_allow_html=True)
-    with r1_col2:
-        val_po = f"${presupuesto_oficial:,.2f}" if presupuesto_oficial > 0 else "N/A"
-        st.markdown(render_card_html("🏛️ Presupuesto Oficial", val_po, badge_text=badge_po, card_type=tipo_card_po), unsafe_allow_html=True)
-    with r1_col3:
-        st.markdown(render_card_html("🚀 Total Oferta", f"${total_oferta:,.2f}", badge_text=badge_oferta, card_type=tipo_card_oferta), unsafe_allow_html=True)
 
-    if es_inviable:
-        st.error(
-            f"🚨 **OFERTA INVIABLE:** El Total de la Oferta (**\\${total_oferta:,.2f}**) "
-            f"supera el Presupuesto Oficial (**\\${presupuesto_oficial:,.2f}**) "
-            f"por **\\${monto_diferencia:,.2f}** (+{pct_desviacion:.1f}%)."
+    with r1_col1:
+        st.markdown(
+            render_card_html(
+                "📋 PROCESO / LICITACIÓN", 
+                str(n_proc), 
+                badge_text="📄 Código Registrado", 
+                card_type="neutral"
+            ), 
+            unsafe_allow_html=True
         )
 
-    # Fila 2: IVA Estimado Dinámico y Márgenes
+    with r1_col2:
+        val_po = f"${presupuesto_oficial:,.2f}" if presupuesto_oficial > 0 else "N/A"
+        st.markdown(
+            render_card_html(
+                "🏛️ PRESUPUESTO OFICIAL", 
+                val_po, 
+                badge_text=badge_po, 
+                card_type=tipo_card_po
+            ), 
+            unsafe_allow_html=True
+        )
+
+    with r1_col3:
+        st.markdown(
+            render_card_html(
+                "🚀 TOTAL OFERTA", 
+                f"${total_oferta:,.2f}", 
+                badge_text=badge_oferta, 
+                card_type=tipo_card_oferta
+            ), 
+            unsafe_allow_html=True
+        )
+
+    # ==========================================
+    # BANNER / TARJETA DE VIABILIDAD ESTRUCTURADA
+    # ==========================================
+    if es_inviable:
+        st.markdown(
+            f"""
+            <div style="
+                background-color: rgba(239, 68, 68, 0.12);
+                border: 1px solid #ef4444;
+                border-left: 6px solid #ef4444;
+                border-radius: 8px;
+                padding: 16px;
+                margin: 15px 0;
+                color: #ffffff;
+            ">
+                <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 12px;">
+                    <span style="font-size: 1.3rem;">🚨</span>
+                    <strong style="font-size: 1.05rem; color: #f87171; letter-spacing: 0.5px;">
+                        OFERTA INVIABLE — SUPERACIÓN DE TECHO PRESUPUESTAL
+                    </strong>
+                </div>
+                <div style="
+                    display: grid; 
+                    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); 
+                    gap: 12px; 
+                    background: rgba(0,0,0,0.25); 
+                    padding: 12px 16px; 
+                    border-radius: 6px;
+                ">
+                    <div>
+                        <span style="color: #a0a6b5; font-size: 0.75rem; display: block; text-transform: uppercase; font-weight: 600;">Presupuesto Oficial</span>
+                        <strong style="color: #ffffff; font-size: 1.1rem;">&#36;{presupuesto_oficial:,.2f}</strong>
+                    </div>
+                    <div>
+                        <span style="color: #a0a6b5; font-size: 0.75rem; display: block; text-transform: uppercase; font-weight: 600;">Total Oferta</span>
+                        <strong style="color: #f87171; font-size: 1.1rem;">&#36;{total_oferta:,.2f}</strong>
+                    </div>
+                    <div>
+                        <span style="color: #a0a6b5; font-size: 0.75rem; display: block; text-transform: uppercase; font-weight: 600;">Exceso / Sobrecosto</span>
+                        <strong style="color: #f87171; font-size: 1.1rem;">+&#36;{monto_diferencia:,.2f} <span style="font-size: 0.85rem; font-weight: 400;">(+{pct_desviacion:.1f}%)</span></strong>
+                    </div>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+    elif presupuesto_oficial > 0:
+        st.markdown(
+            f"""
+            <div style="
+                background-color: rgba(34, 197, 94, 0.12);
+                border: 1px solid #22c55e;
+                border-left: 6px solid #22c55e;
+                border-radius: 8px;
+                padding: 16px;
+                margin: 15px 0;
+                color: #ffffff;
+            ">
+                <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 12px;">
+                    <span style="font-size: 1.3rem;">✅</span>
+                    <strong style="font-size: 1.05rem; color: #4ade80; letter-spacing: 0.5px;">
+                        OFERTA VIABLE — DENTRO DEL TECHO PRESUPUESTAL
+                    </strong>
+                </div>
+                <div style="
+                    display: grid; 
+                    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); 
+                    gap: 12px; 
+                    background: rgba(0,0,0,0.25); 
+                    padding: 12px 16px; 
+                    border-radius: 6px;
+                ">
+                    <div>
+                        <span style="color: #a0a6b5; font-size: 0.75rem; display: block; text-transform: uppercase; font-weight: 600;">Presupuesto Oficial</span>
+                        <strong style="color: #ffffff; font-size: 1.1rem;">&#36;{presupuesto_oficial:,.2f}</strong>
+                    </div>
+                    <div>
+                        <span style="color: #a0a6b5; font-size: 0.75rem; display: block; text-transform: uppercase; font-weight: 600;">Total Oferta</span>
+                        <strong style="color: #4ade80; font-size: 1.1rem;">&#36;{total_oferta:,.2f}</strong>
+                    </div>
+                    <div>
+                        <span style="color: #a0a6b5; font-size: 0.75rem; display: block; text-transform: uppercase; font-weight: 600;">Holgura Disponible</span>
+                        <strong style="color: #4ade80; font-size: 1.1rem;">&#36;{monto_diferencia:,.2f} <span style="font-size: 0.85rem; font-weight: 400;">(-{pct_desviacion:.1f}%)</span></strong>
+                    </div>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+    # FILA 2 DE TARJETAS (Métricas Económicas internas - 4 Columnas)
     r2_col1, r2_col2, r2_col3, r2_col4 = st.columns(4)
+
     with r2_col1:
-        st.markdown(render_card_html("📦 Costo Base Neto", f"${costo_total_acum:,.2f}", card_type="neutral"), unsafe_allow_html=True)
+        st.markdown(
+            render_card_html(
+                "📦 COSTO BASE NETO", 
+                f"${costo_total_acum:,.2f}", 
+                badge_text="📊 Total Insumos", 
+                card_type="neutral"
+            ), 
+            unsafe_allow_html=True
+        )
+
     with r2_col2:
-        st.markdown(render_card_html("🏷️ Subtotal Venta", f"${subtotal_venta:,.2f}", card_type="neutral"), unsafe_allow_html=True)
+        st.markdown(
+            render_card_html(
+                "🏷️ SUBTOTAL VENTA", 
+                f"${subtotal_venta:,.2f}", 
+                badge_text="💵 Antes de Impuestos", 
+                card_type="neutral"
+            ), 
+            unsafe_allow_html=True
+        )
+
     with r2_col3:
-        st.markdown(render_card_html("🏛️ IVA Estimado", f"${iva_total_acum:,.2f}", card_type="neutral"), unsafe_allow_html=True)
+        st.markdown(
+            render_card_html(
+                "🏛️ IVA ESTIMADO", 
+                f"${iva_total_acum:,.2f}", 
+                badge_text="🧾 Impuesto Indirecto", 
+                card_type="neutral"
+            ), 
+            unsafe_allow_html=True
+        )
+
     with r2_col4:
         badge_ub = f"↑ {margen_global_pct:.2f}% Margen Real"
-        st.markdown(render_card_html("💰 Utilidad Bruta", f"${utilidad_bruta:,.2f}", badge_text=badge_ub, card_type="green"), unsafe_allow_html=True)
+        st.markdown(
+            render_card_html(
+                "💰 UTILIDAD BRUTA", 
+                f"${utilidad_bruta:,.2f}", 
+                badge_text=badge_ub, 
+                card_type="green"
+            ), 
+            unsafe_allow_html=True
+        )
+
     st.markdown("---")
 
-    # --- 4. PANEL DE ACCIONES ---
-    act_col1, act_col2 = st.columns(2)
+    # 4. PANEL REORGANIZADO DE ACCIONES Y CONTROLES (ESTANDARIZADO Y ALINEADO)
+    st.markdown("##### ⚙️ Acciones y Gestión de Cotización")
 
-    with act_col1:
+    # FILA 1: Estado de Cotización (Selectbox) y Descargar Excel
+    f1_col1, f1_col2 = st.columns(2)
+
+    with f1_col1:
         estados_disponibles = ["BORRADOR", "ENVIADA", "APROBADA", "RECHAZADA"]
-        idx_est = estados_disponibles.index(cot_info["estado"]) if cot_info["estado"] in estados_disponibles else 0
-        nuevo_estado = st.selectbox("Estado de Cotización", estados_disponibles, index=idx_est, key=f"est_{cot_id_sel}")
+        idx_est = (
+            estados_disponibles.index(cot_info["estado"])
+            if cot_info["estado"] in estados_disponibles
+            else 0
+        )
+        nuevo_estado = st.selectbox(
+            "Estado de Cotización",
+            estados_disponibles,
+            index=idx_est,
+            key=f"est_{cot_id_sel}",
+        )
         if nuevo_estado != cot_info["estado"]:
             actualizar_estado_cotizacion(cot_id_sel, nuevo_estado)
             st.success(f"Estado actualizado a {nuevo_estado}")
             st.rerun()
 
-        if st.button("✏️ Editar Encabezado", use_container_width=True, key=f"btn_edit_enc_{cot_id_sel}"):
-            modal_editar_encabezado(cot_info, cot_id_sel)
-
-    with act_col2:
+    with f1_col2:
+        # Compensador visual (28px) para alinear el botón con la caja del selectbox de la izquierda
+        st.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True)
         excel_bytes = generar_excel_cotizacion(cot_info.to_dict(), df_items)
         st.download_button(
             label="📥 Descargar Excel",
@@ -538,19 +699,42 @@ def render_editor_cotizacion(cot_id_sel, df_cot):
             file_name=f"cotizacion_{cot_info['numero_cotizacion']}.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True,
+            key=f"btn_download_{cot_id_sel}",
         )
 
+    # FILA 2: Editar Encabezado y Eliminar Cotización
+    f2_col1, f2_col2 = st.columns(2)
+
+    with f2_col1:
+        if st.button(
+            "✏️ Editar Encabezado",
+            use_container_width=True,
+            key=f"btn_edit_enc_{cot_id_sel}",
+        ):
+            modal_editar_encabezado(cot_info, cot_id_sel)
+
+    with f2_col2:
         with st.popover("🗑️ Eliminar Cotización", use_container_width=True):
             st.warning("⚠️ Acción permanente. Eliminará la cotización e ítems asociados.")
-            if st.button("Confirmar Eliminación", type="primary", key=f"btn_del_{cot_id_sel}", use_container_width=True):
+            if st.button(
+                "Confirmar Eliminación",
+                type="primary",
+                key=f"btn_del_{cot_id_sel}",
+                use_container_width=True,
+            ):
                 eliminar_cotizacion_completa(cot_id_sel)
                 st.session_state.pop("cot_id_activa", None)
                 st.rerun()
 
     st.markdown("---")
 
-    # --- 5. TABLA DE ÍTEMS ---
-    st.markdown(f"#### 📦 Ítems Incluidos ({len(df_items)} ítems)")
+    # 5. TABLA DE ÍTEMS CON BARRA INTEGRADA
+    col_hdr_tbl, col_btn_tbl = st.columns([3, 1])
+    with col_hdr_tbl:
+        st.markdown(f"#### 📦 Ítems Incluidos ({len(df_items)} ítems)")
+    with col_btn_tbl:
+        btn_agregar_tabla = st.button("➕ Añadir Ítem", type="primary", use_container_width=True, key=f"btn_add_tbl_{cot_id_sel}")
+
     st.caption("💡 **Tip:** Haz clic sobre cualquier fila para abrir la Calculadora y Editar el Ítem.")
 
     idx_seleccionado = None
@@ -585,19 +769,13 @@ def render_editor_cotizacion(cot_id_sel, df_cot):
             },
         )
 
-        # Guardamos la selección sin abrir el modal de forma inmediata
         if event and event.get("selection") and event["selection"].get("rows"):
             idx_seleccionado = event["selection"]["rows"][0]
     else:
         st.info("Esta cotización aún no contiene ítems asociados.")
 
-    st.markdown("---")
-
-    # --- 6. BOTÓN Y CONTROL DE MODALES (AÑADIR VS. EDITAR) ---
-    btn_agregar = st.button("➕ Añadir nuevo ítem a esta cotización", use_container_width=True, type="primary")
-
-    # Exclusión mutua: Streamlit solo permite ejecutar un @st.dialog por renderizado
-    if btn_agregar:
+    # 6. DISPARO EXCLUSIVO DE MODALES
+    if btn_agregar_tabla:
         modal_agregar_item(cot_id_sel, cot_info)
     elif idx_seleccionado is not None:
         item_row = df_items.iloc[idx_seleccionado]
@@ -618,157 +796,6 @@ def render_tab_historico():
         render_editor_cotizacion(st.session_state["cot_id_activa"], df_cot)
     else:
         render_registro_general(df_cot)
-
-def render_resumen_financiero_secop(
-    cotizacion_data, presupuesto_oficial, fecha_limite_dt=None
-):
-    """Renderiza el resumen financiero comparando la oferta contra el Presupuesto Oficial SECOP
-
-    con semaforización de colores correcta.
-    """
-    total_oferta = cotizacion_data.get("total_oferta", 0.0)
-    costo_base = cotizacion_data.get("costo_base_neto", 0.0)
-    subtotal_venta = cotizacion_data.get("subtotal_venta", 0.0)
-    iva_estimado = cotizacion_data.get("iva_estimado", 0.0)
-    utilidad_bruta = cotizacion_data.get("utilidad_bruta", 0.0)
-    margen_real = cotizacion_data.get("margen_real_pct", 0.0)
-    codigo_proceso = cotizacion_data.get("codigo_proceso", "SMC-041-2026")
-
-    # --- CÁLCULOS DE VIABILIDAD DE PRESUPUESTO ---
-    diferencia = presupuesto_oficial - total_oferta
-    es_inviable = total_oferta > presupuesto_oficial
-
-    if presupuesto_oficial > 0:
-        pct_desviacion = (
-            abs(diferencia) / presupuesto_oficial
-        ) * 100.0  # Porcentaje absoluto
-    else:
-        pct_desviacion = 0.0
-
-    # Determinar etiquetas y estilos según viabilidad
-    if es_inviable:
-        # EXCEDE EL PRESUPUESTO (ROJO)
-        monto_exceso = abs(diferencia)
-        delta_str = (
-            f"↓ -${monto_exceso:,.2f} Exceso (+{pct_desviacion:.1f}% sobre techo)"
-        )
-        color_oferta_card = "#ff4d4d"  # Rojo
-        border_oferta = "1px solid #ff4d4d"
-        bg_oferta = "rgba(255, 77, 77, 0.1)"
-        icon_oferta = "🚨"
-    else:
-        # DENTRO DEL PRESUPUESTO (VERDE)
-        delta_str = (
-            f"↑ +${diferencia:,.2f} Holgura (-{pct_desviacion:.1f}% del techo)"
-        )
-        color_oferta_card = "#00e676"  # Verde
-        border_oferta = "1px solid #00e676"
-        bg_oferta = "rgba(0, 230, 118, 0.1)"
-        icon_oferta = "🚀"
-
-    st.markdown("### 📈 Resumen Financiero y Comparativa SECOP")
-
-    # --- COMPONENTES VISUALES DE TARJETAS (MÉTRICAS) ---
-    c1, c2, c3 = st.columns(3)
-
-    with c1:
-        st.markdown(
-            f"""
-            <div style="border: 1px solid #31333F; background-color: #0E1117; padding: 12px; border-radius: 8px;">
-                <span style="font-size: 12px; color: #808495; font-weight: bold;">📋 PROCESO / LICITACIÓN</span>
-                <h3 style="margin: 4px 0 0 0; color: #FFFFFF;">{codigo_proceso}</h3>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-    with c2:
-        # Presupuesto Oficial y Estado de Holgura
-        color_holgura = "#ff4d4d" if es_inviable else "#00e676"
-        st.markdown(
-            f"""
-            <div style="border: 1px solid #1E88E5; background-color: #0E1117; padding: 12px; border-radius: 8px;">
-                <span style="font-size: 12px; color: #90CAF9; font-weight: bold;">🏛️ PRESUPUESTO OFICIAL</span>
-                <h3 style="margin: 4px 0 0 0; color: #90CAF9;">${presupuesto_oficial:,.2f}</h3>
-                <span style="font-size: 12px; color: {color_holgura}; font-weight: bold;">{delta_str}</span>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-    with c3:
-        # Total Oferta con Semaforización Dinámica
-        st.markdown(
-            f"""
-            <div style="border: {border_oferta}; background-color: {bg_oferta}; padding: 12px; border-radius: 8px;">
-                <span style="font-size: 12px; color: {color_oferta_card}; font-weight: bold;">{icon_oferta} TOTAL OFERTA</span>
-                <h3 style="margin: 4px 0 0 0; color: {color_oferta_card};">${total_oferta:,.2f}</h3>
-                <span style="font-size: 12px; color: {color_oferta_card};">{'⚠️ INVIABLE (Supera Techo)' if es_inviable else '✅ VIABLE (Dentro de Techo)'}</span>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-    st.write("")  # Espaciador
-
-    # Segundas Métricas: Costos, IVA y Utilidad
-    m1, m2, m3, m4 = st.columns(4)
-    with m1:
-        st.metric("📦 COSTO BASE NETO", f"${costo_base:,.2f}")
-    with m2:
-        st.metric("🏷️ SUBTOTAL VENTA", f"${subtotal_venta:,.2f}")
-    with m3:
-        st.metric("🏛️ IVA ESTIMADO", f"${iva_estimado:,.2f}")
-    with m4:
-        st.metric(
-            "💰 UTILIDAD BRUTA",
-            f"${utilidad_bruta:,.2f}",
-            delta=f"{margen_real:.2f}% Margen Real",
-        )
-
-    # --- BANNER DE ADVERTENCIA CRÍTICA ---
-    if es_inviable:
-        st.error(
-            f"🚨 **OFERTA INVIABLE PARA PRESENTAR:** El Total de la Oferta (**\\${total_oferta:,.2f}**) "
-            f"supera el Presupuesto Oficial (**\\${presupuesto_oficial:,.2f}**) por un monto de "
-            f"**\\${abs(diferencia):,.2f}** ({pct_desviacion:.1f}% por encima). "
-            f"En SECOP esta propuesta será **descalificada automáticamente**. Ajusta los márgenes o costos de los ítems."
-        )
-    else:
-        st.success(
-            f"✅ **OFERTA VIABLE:** El Total de la Oferta (**\\${total_oferta:,.2f}**) está dentro del límite del "
-            f"Presupuesto Oficial (**\\${presupuesto_oficial:,.2f}**) con un margen disponible de **\\${diferencia:,.2f}**."
-        )
-
-# ==============================================================================
-# HELPER PARA FORMATEAR Y EVALUAR EL PLAZO / VENCIMIENTO
-# ==============================================================================
-def obtener_badge_plazo(fecha_limite_str):
-    """Convierte un string de fecha a badge formateado con tiempo restante / vencido."""
-    if not fecha_limite_str:
-        return "Sin fecha de cierre"
-
-    try:
-        # Ajusta el formato de fecha según venga en la DB / API
-        dt_limite = datetime.datetime.strptime(
-            fecha_limite_str, "%Y-%m-%d %H:%M:%S"
-        )
-        ahora = datetime.datetime.now()
-        diferencia = dt_limite - ahora
-
-        if diferencia.total_seconds() < 0:
-            # Vencido
-            abs_diff = abs(diferencia)
-            dias = abs_diff.days
-            horas = abs_diff.seconds // 3600
-            return f"❌ **Plazo:** {dt_limite.strftime('%d/%m/%Y %H:%M:%S')} **(Vencido hace {dias} días {horas} h)**"
-        else:
-            # Vigente
-            dias = diferencia.days
-            horas = diferencia.seconds // 3600
-            return f"⏳ **Plazo:** {dt_limite.strftime('%d/%m/%Y %H:%M:%S')} **(Quedan {dias} días {horas} h)**"
-    except Exception:
-        return f"📅 **Plazo:** {fecha_limite_str}"
 
 def obtener_badge_plazo_html(fecha_limite_val):
     if not fecha_limite_val or pd.isna(fecha_limite_val):
@@ -815,89 +842,4 @@ def obtener_badge_plazo_html(fecha_limite_val):
             f'<span style="margin-left: 6px; background: #2e7d32; color: #ffffff; padding: 1px 6px; border-radius: 4px; font-size: 0.75rem;">Vigente (Quedan {dias} días {horas} h)</span>'
             f'</span></div>'
         )
-
-def render_form_agregar_item(conn, cotizacion_id_activa: int):
-    st.subheader("➕ Añadir Nuevo Ítem a la Cotización")
-
-    # 1. BÚSQUEDA Y AUTOCOMPLETADO DESDE EL BANCO DE ÍTEMS HISTÓRICO
-    with st.expander("🔍 Buscar en Banco de Ítem Históricos (Opcional)", expanded=False):
-        df_banco = pd.read_sql("SELECT id, descripcion, unidad_medida, costo_unitario, enlace FROM public.banco_items_historico ORDER BY id DESC LIMIT 200;", conn)
-        
-        item_seleccionado = st.selectbox(
-            "Seleccionar ítem base para copiar datos:",
-            options=[None] + df_banco['id'].tolist(),
-            format_func=lambda x: "--- Seleccionar un ítem ---" if x is None else f"ID {x} | {df_banco.loc[df_banco['id']==x, 'descripcion'].values[0][:60]}... ($ {df_banco.loc[df_banco['id']==x, 'costo_unitario'].values[0]:,.0f})"
-        )
-        
-        # Pre-cargar valores si el usuario selecciona un ítem
-        default_desc = ""
-        default_unidad = "UND"
-        default_costo = 0.0
-        default_enlace = ""
-        
-        if item_seleccionado:
-            row = df_banco[df_banco['id'] == item_seleccionado].iloc[0]
-            default_desc = str(row['descripcion'])
-            default_unidad = str(row['unidad_medida']) if row['unidad_medida'] else "UND"
-            default_costo = float(row['costo_unitario']) if row['costo_unitario'] else 0.0
-            default_enlace = str(row['enlace']) if row['enlace'] else ""
-
-    # 2. FORMULARIO DE INGRESO Y CÁLCULO
-    with st.form(key="form_nuevo_item", clear_on_submit=True):
-        col_num, col_desc, col_unid = st.columns([1, 4, 1.5])
-        
-        with col_num:
-            num_item = st.number_input("N° Ítem", min_value=1, value=1, step=1)
-        with col_desc:
-            descripcion = st.text_area("Descripción del Ítem / Servicio", value=default_desc, height=80)
-        with col_unid:
-            unidad_medida = st.text_input("Unidad", value=default_unidad)
-
-        col_cant, col_costo, col_margen = st.columns(3)
-        
-        with col_cant:
-            cantidad = st.number_input("Cantidad", min_value=0.01, value=1.0, step=1.0, format="%.2f")
-        with col_costo:
-            costo_unitario = st.number_input("Costo Unitario ($)", min_value=0.0, value=default_costo, step=1000.0, format="%.2f")
-        with col_margen:
-            # Factor Divisor en %
-            margen_pct = st.number_input("Margen Real (%)", min_value=0.0, max_value=99.0, value=20.0, step=5.0, help="Calcula el precio mediante: Costo / (1 - Margen%)")
-
-        enlace_ref = st.text_input("Enlace / Referencia del Proveedor", value=default_enlace)
-
-        # CÁLCULOS MATEMÁTICOS DIRECTOS
-        margen_dec = margen_pct / 100.0
-        precio_venta_unitario = costo_unitario / (1.0 - margen_dec) if margen_dec < 1.0 else costo_unitario
-        subtotal_item = precio_venta_unitario * cantidad
-        utilidad_estimada = (precio_venta_unitario - costo_unitario) * cantidad
-
-        # VISTA PREVIA DE RESULTADOS
-        st.info(
-            f"**Precio Venta Unitario:** $ {precio_venta_unitario:,.2f}  |  "
-            f"**Subtotal Ítem:** $ {subtotal_item:,.2f}  |  "
-            f"**Utilidad Bruta:** $ {utilidad_estimada:,.2f}"
-        )
-
-        btn_guardar = st.form_submit_button("💾 Guardar Ítem en la Cotización", use_container_width=True)
-
-        if btn_guardar:
-            if not descripcion.strip():
-                st.error("La descripción del ítem no puede estar vacía.")
-            else:
-                query_insert = """
-                    INSERT INTO public.cotizacion_items (
-                        cotizacion_id, numero_item, descripcion, cantidad, 
-                        unidad_medida, costo_unitario, margen_porcentaje, 
-                        precio_venta_unitario, subtotal_item, enlace_referencia
-                    )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s);
-                """
-                with conn.cursor() as cur:
-                    cur.execute(query_insert, (
-                        cotizacion_id_activa, num_item, descripcion, cantidad,
-                        unidad_medida, costo_unitario, margen_pct,
-                        precio_venta_unitario, subtotal_item, enlace_ref
-                    ))
-                    conn.commit()
-                st.success(f"Ítem N° {num_item} añadido correctamente.")
-                st.rerun()
+  
