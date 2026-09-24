@@ -10,6 +10,7 @@ from database.cotizaciones_db import (
     cargar_detalle_cotizacion,
     eliminar_cotizacion_completa,
     insertar_item_cotizacion,
+    actualizar_parametros_globales_db,
 )
 from database.secop_db import (
     cargar_licitaciones,
@@ -143,7 +144,7 @@ def modal_editar_item(cot_id_sel, item_row, df_items):
             st.session_state[tabla_key] = {"selection": {"rows": [], "columns": []}}
             st.rerun()
         else:
-            st.error("Error al guardar en la base de datos.")
+            st.error("Error al guardar en la base de datos.") 
 
 # ==============================================================================
 # MODAL NATIVO: EDICIÓN DE ENCABEZADO Y PARÁMETROS GLOBALES (ANCHO ESTÁNDAR)
@@ -165,7 +166,7 @@ def modal_editar_encabezado(cot_info, cot_id_sel):
     nuevo_proc = opciones_lic[proceso_sel]
 
     col_e1, col_e2, col_e3 = st.columns(3)
-    
+
     with col_e1:
         tipos_estandar = ["GENERAL", "EPP", "SOFTWARE", "INFRAESTRUCTURA", "SERVICIOS"]
         tipo_actual = cot_info["tipo_cotizacion"] if pd.notna(cot_info["tipo_cotizacion"]) else "GENERAL"
@@ -175,12 +176,12 @@ def modal_editar_encabezado(cot_info, cot_id_sel):
     with col_e2:
         margen_actual = float(cot_info.get("margen_global", 20.0)) if pd.notna(cot_info.get("margen_global")) else 20.0
         nuevo_margen = st.number_input(
-            "Margen Base (%)", 
-            min_value=0.0, 
-            max_value=500.0, 
-            value=margen_actual, 
+            "Margen Base Global (%)",
+            min_value=0.0,
+            max_value=90.0,
+            value=margen_actual,
             step=0.5,
-            help="Margen base predeterminado aplicable a los ítems de esta cotización"
+            help="Margen global aplicable en lote a los ítems de esta cotización"
         )
 
     with col_e3:
@@ -188,31 +189,25 @@ def modal_editar_encabezado(cot_info, cot_id_sel):
         nuevo_iva = st.number_input("IVA Global (%)", min_value=0.0, max_value=100.0, value=iva_actual, step=1.0)
 
     nuevas_obs = st.text_area(
-        "Observaciones / Términos", 
+        "Observaciones / Términos",
         value=(cot_info["observaciones"] if pd.notna(cot_info["observaciones"]) else "")
     )
 
-    if st.button("💾 Guardar Cambios de Encabezado", type="primary", use_container_width=True):
-        exito = actualizar_encabezado_cotizacion(
+    if st.button("💾 Guardar y Recomputar Lote Completo", type="primary", use_container_width=True):
+        exito = actualizar_parametros_globales_db(
             cotizacion_id=cot_id_sel,
-            tipo_cotizacion=nuevo_tipo,
-            numero_proceso=nuevo_proc,
-            margen_global=nuevo_margen,
-            porcentaje_iva=nuevo_iva,
-            observaciones=nuevas_obs.strip(),
+            nuevo_margen=nuevo_margen,
+            nuevo_iva=nuevo_iva,
+            nuevo_tipo=nuevo_tipo,
+            numero_proceso=nuevo_proc,  # <--- Descomentar si deseas guardar la licitación
+            observaciones=nuevas_obs,
+            aplicar_a_items=True
         )
         if exito:
-            df_items = cargar_detalle_cotizacion(cot_id_sel)
-            if not df_items.empty and "tratamiento_iva" in df_items.columns:
-                mask_no_exento = df_items["tratamiento_iva"] != "Exento / Excluido (0%)"
-                if mask_no_exento.any():
-                    df_items.loc[mask_no_exento, "porcentaje_iva"] = nuevo_iva
-                    actualizar_items_y_cotizacion_db(cot_id_sel, df_items)
-
-            st.toast("✅ Encabezado e IVA global actualizados.", icon="🎉")
+            st.toast("✅ Parámetros globales actualizados y totales recalculados en la BD.", icon="🎉")
             st.rerun()
         else:
-            st.error("Error actualizando el encabezado en la base de datos.")
+            st.error("Error al actualizar los parámetros en la base de datos.")
 
 # ==============================================================================
 # MODAL NATIVO: AGREGAR NUEVO ÍTEM (ANCHO ESTÁNDAR)
@@ -468,9 +463,161 @@ def render_editor_cotizacion(cot_id_sel, df_cot):
     margen_global_pct = (utilidad_bruta / subtotal_venta * 100.0) if subtotal_venta > 0 else 0.0
 
     # ==========================================
-    # 3. RESUMEN FINANCIERO Y COMPARATIVA SECOP
+    # 3. RESUMEN FINANCIERO DINÁMICO & SIMULADOR
     # ==========================================
-    st.markdown("##### 📈 Resumen Financiero y Comparativa SECOP")
+    st.markdown("##### 📈 Resumen Financiero, Dinámico y Simulador y Comparativa SECOP")
+
+    # --- Extracción y parseo seguro del Presupuesto Oficial ---
+    if presupuesto_oficial == 0.0:
+        raw_po = cot_info.get("presupuesto") or cot_info.get("presupuesto_oficial")
+        try:
+            if raw_po is not None and not pd.isna(raw_po):
+                presupuesto_oficial = float(raw_po)
+        except (ValueError, TypeError):
+            presupuesto_oficial = 0.0
+
+    # --- PANEL DEL SIMULADOR DINÁMICO ---
+    with st.expander("🎛️ Simulador Financiero en Tiempo Real (Ajuste Dinámico)", expanded=True):
+        st.caption("Modifica el margen base en pantalla para simular la oferta en tiempo real antes de guardar en la base de datos.")
+
+        # 1. Ajuste de Controles a 2 Columnas (Sin IVA Simulado)
+        col_sim1, col_sim2 = st.columns(2)
+
+        with col_sim1:
+            sim_margen = st.slider(
+                "Margen Base Simulado (%)",
+                min_value=0.0,
+                max_value=90.0,
+                value=float(cot_info.get("margen_global", 20.0) or 20.0),
+                step=0.5,
+                key=f"sim_margen_{cot_id_sel}"
+            )
+
+        with col_sim2:
+            piso_minimo_pct = st.number_input(
+                "Piso Mínimo de Rentabilidad (%)",
+                min_value=0.0,
+                max_value=100.0,
+                value=10.0,
+                step=1.0,
+                help="Rentabilidad mínima exigida para alertar viabilidad financiera del proyecto.",
+                key=f"piso_min_{cot_id_sel}"
+            )
+
+        # --- CÁLCULO DINÁMICO EN MEMORIA PARA LA SIMULACIÓN ---
+        if not df_items.empty:
+            df_sim = df_items.copy()
+            
+            # Recálculo instantáneo por ítem ajustando el margen simulado
+            f_div_sim = 1.0 - (sim_margen / 100.0)
+            f_div_sim = f_div_sim if f_div_sim > 0 else 0.01
+            
+            df_sim["p_venta_sim"] = df_sim["costo_unitario"] / f_div_sim
+            df_sim["subtotal_sim"] = df_sim["p_venta_sim"] * df_sim["cantidad"]
+            
+            # El IVA se calcula con la tarifa real de cada ítem
+            df_sim["iva_monto_sim"] = df_sim["subtotal_sim"] * (df_sim["iva_pct_real"] / 100.0)
+
+            sim_costo_total = (df_sim["costo_unitario"] * df_sim["cantidad"]).sum()
+            sim_subtotal_venta = df_sim["subtotal_sim"].sum()
+            sim_iva_total = df_sim["iva_monto_sim"].sum()
+            sim_total_oferta = sim_subtotal_venta + sim_iva_total
+        else:
+            sim_costo_total = costo_total_acum
+            f_div_sim = 1.0 - (sim_margen / 100.0)
+            f_div_sim = f_div_sim if f_div_sim > 0 else 0.01
+            sim_subtotal_venta = costo_total_acum / f_div_sim if costo_total_acum > 0 else subtotal_venta
+            sim_iva_total = sim_subtotal_venta * (iva_hdr_def / 100.0)
+            sim_total_oferta = sim_subtotal_venta + sim_iva_total
+
+        sim_utilidad_bruta = sim_subtotal_venta - sim_costo_total
+        sim_margen_real = (sim_utilidad_bruta / sim_subtotal_venta * 100.0) if sim_subtotal_venta > 0 else 0.0
+
+        # --- EVALUACIÓN DE PISO MÍNIMO Y TECHO SECOP ---
+        cumple_piso = sim_margen_real >= piso_minimo_pct
+        es_inviable_secop = (sim_total_oferta > presupuesto_oficial) if presupuesto_oficial > 0 else False
+        dif_secop = presupuesto_oficial - sim_total_oferta
+
+        # --- MÉRITOS Y MÉTRICAS SIMULADAS CON ESTILO DE TARJETAS HTML ---
+        col_res1, col_res2, col_res3, col_res4 = st.columns(4)
+
+        # Cálculo de badges de variación
+        diff_subtotal = sim_subtotal_venta - subtotal_venta
+        badge_subtotal = f"{'↑ +' if diff_subtotal >= 0 else '↓ '}${diff_subtotal:,.2f}" if abs(diff_subtotal) > 0.01 else "Base Actual"
+
+        diff_iva = sim_iva_total - iva_total_acum
+        badge_iva = f"{'↑ +' if diff_iva >= 0 else '↓ '}${diff_iva:,.2f}" if abs(diff_iva) > 0.01 else "Calculado en BD"
+
+        diff_total = sim_total_oferta - total_oferta
+        badge_total = f"{'↑ +' if diff_total >= 0 else '↓ '}${diff_total:,.2f}" if abs(diff_total) > 0.01 else "Base Actual"
+
+        badge_utilidad = f"{'↑' if cumple_piso else '⚠️'} {sim_margen_real:.1f}% Margen (Piso: {piso_minimo_pct:.1f}%)"
+        card_type_utilidad = "green" if cumple_piso else "red"
+        card_type_total = "red" if es_inviable_secop else "neutral"
+
+        with col_res1:
+            st.markdown(
+                render_card_html(
+                    "SUBTOTAL SIMULADO",
+                    f"${sim_subtotal_venta:,.2f}",
+                    badge_text=badge_subtotal,
+                    card_type="neutral"
+                ),
+                unsafe_allow_html=True
+            )
+
+        with col_res2:
+            st.markdown(
+                render_card_html(
+                    "IVA ESTIMADO",
+                    f"${sim_iva_total:,.2f}",
+                    badge_text=badge_iva,
+                    card_type="neutral"
+                ),
+                unsafe_allow_html=True
+            )
+
+        with col_res3:
+            st.markdown(
+                render_card_html(
+                    "TOTAL OFERTA SIMULADO",
+                    f"${sim_total_oferta:,.2f}",
+                    badge_text=badge_total,
+                    card_type=card_type_total
+                ),
+                unsafe_allow_html=True
+            )
+
+        with col_res4:
+            st.markdown(
+                render_card_html(
+                    "UTILIDAD BRUTA",
+                    f"${sim_utilidad_bruta:,.2f}",
+                    badge_text=badge_utilidad,
+                    card_type=card_type_utilidad
+                ),
+                unsafe_allow_html=True
+            )
+
+        # Alertas de viabilidad
+        if not cumple_piso:
+            st.error(f"⚠️ **Alerta de Piso Mínimo:** La rentabilidad simulada ({sim_margen_real:.2f}%) está por debajo del piso mínimo establecido ({piso_minimo_pct:.2f}%).")
+
+        if es_inviable_secop:
+            st.error(f"🚨 **Alerta SECOP:** El total simulado (&#36;{sim_total_oferta:,.2f}) supera el Techo Presupuestal Oficial (&#36;{presupuesto_oficial:,.2f}) por &#36;{abs(dif_secop):,.2f}.")
+
+        # Botón para consolidar los cambios en la BD
+        if st.button("💾 Aplicar Parámetros de la Simulación a la Cotización (BD)", type="primary", use_container_width=True):
+            exito = actualizar_parametros_globales_db(
+                cotizacion_id=cot_id_sel,
+                nuevo_margen=sim_margen,
+                aplicar_a_items=True
+            )
+            if exito:
+                st.toast("✅ Parámetros simulados aplicados en la base de datos.", icon="🎉")
+                st.rerun()
+            else:
+                st.error("Error al aplicar la simulación en la base de datos.")
 
     es_inviable = (total_oferta > presupuesto_oficial) if presupuesto_oficial > 0 else False
     diferencia = presupuesto_oficial - total_oferta

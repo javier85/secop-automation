@@ -752,79 +752,136 @@ def insertar_item_cotizacion(
         return True
     except Exception as e:
         st.error(f"Error insertando ítem en la cotización: {e}")
-        return False
+        return False   
 
 def actualizar_parametros_globales_db(
-    cotizacion_id: int, 
-    nuevo_margen: float, 
-    nuevo_iva: float, 
-    observaciones: str = None
+    cotizacion_id: int,
+    nuevo_margen: float = None,
+    nuevo_iva: float = None,
+    nuevo_tipo: str = None,
+    numero_proceso: str = None,
+    observaciones: str = None,
+    aplicar_a_items: bool = True,
 ) -> bool:
     """
-    Actualiza el margen e IVA global de la cotización Y fuerza a que 
-    todos los ítems individuales adopten el nuevo IVA.
+    Actualiza en lote los parámetros globales de una cotización y recalcula
+    dinámicamente el precio de venta, subtotales e impuestos de todos sus ítems,
+    así como los totales generales (subtotal, IVA, total) en la base de datos.
     """
-    tratamiento_iva = "Exento / Excluido (0%)" if nuevo_iva == 0.0 else "Con IVA Incluido"
+    sql_get_cot = """
+        SELECT margen_global, porcentaje_iva, tipo_cotizacion, numero_proceso, observaciones 
+        FROM cotizaciones WHERE id = %s;
+    """
+    
+    sql_update_cot_hdr = """
+        UPDATE cotizaciones
+        SET tipo_cotizacion = %s,
+            numero_proceso = %s,
+            observaciones = %s,
+            margen_global = %s,
+            porcentaje_iva = %s
+        WHERE id = %s;
+    """
 
-    # Actualiza el IVA y su tratamiento en TODOS los ítems de esta cotización
-    sql_update_items = """
-        UPDATE cotizacion_items
-        SET porcentaje_iva = %s,
-            tratamiento_iva = %s
+    sql_get_items = """
+        SELECT id, costo_unitario, cantidad, tratamiento_iva
+        FROM cotizacion_items
         WHERE cotizacion_id = %s;
     """
 
-    # Recalcula subtotal, IVA total y Total general de la cotización
-    sql_recalcular_cotizacion = """
-        WITH totales AS (
-            SELECT 
-                COALESCE(SUM(subtotal_item), 0.0) AS nuevo_subtotal,
-                COALESCE(SUM(
-                    CASE 
-                        WHEN %s = 0.0 THEN 0.0
-                        ELSE subtotal_item * (%s / 100.0)
-                    END
-                ), 0.0) AS nuevo_iva
-            FROM cotizacion_items
-            WHERE cotizacion_id = %s
-        )
+    sql_update_item = """
+        UPDATE cotizacion_items
+        SET margen_porcentaje = %s,
+            porcentaje_iva = %s,
+            precio_venta_unitario = %s,
+            subtotal_item = %s
+        WHERE id = %s;
+    """
+
+    sql_update_totales = """
         UPDATE cotizaciones
-        SET 
-            margen_base = %s,
-            porcentaje_iva_global = %s,
-            observaciones = %s,
-            subtotal = totales.nuevo_subtotal,
-            impuesto_iva = totales.nuevo_iva,
-            total = totales.nuevo_subtotal + totales.nuevo_iva
-        FROM totales
-        WHERE cotizaciones.id = %s;
+        SET subtotal = %s,
+            impuesto_iva = %s,
+            total = %s
+        WHERE id = %s;
     """
 
     try:
         with get_db_connection() as conn:
             with conn.cursor() as cur:
-                # 1. Aplicar nuevo IVA masivamente a cada renglón
-                cur.execute(sql_update_items, (nuevo_iva, tratamiento_iva, cotizacion_id))
+                # 1. Obtener valores actuales de respaldo
+                cur.execute(sql_get_cot, (cotizacion_id,))
+                row = cur.fetchone()
+                if not row:
+                    return False
+
+                m_global = nuevo_margen if nuevo_margen is not None else float(row[0] or 20.0)
+                p_iva = nuevo_iva if nuevo_iva is not None else float(row[1] or 19.0)
+                t_tipo = nuevo_tipo if nuevo_tipo is not None else row[2]
                 
-                # 2. Recalcular totales generales
-                cur.execute(
-                    sql_recalcular_cotizacion,
-                    (
-                        nuevo_iva, 
-                        nuevo_iva, 
-                        cotizacion_id, 
-                        nuevo_margen, 
-                        nuevo_iva, 
-                        observaciones, 
-                        cotizacion_id
+                # --- LÓGICA DE RESPALDO CORREGIDA ---
+                # Si numero_proceso es None (ej. desde el simulador), conserva row[3] de la BD.
+                # Si se pasa explícitamente una cadena, aplica .strip() o asigna None si viene vacía.
+                if numero_proceso is not None:
+                    n_proc = numero_proceso.strip() if numero_proceso.strip() else None
+                else:
+                    n_proc = row[3]
+
+                obs = observaciones.strip() if observaciones is not None else row[4]
+
+                # 2. Actualizar el encabezado de la cotización
+                cur.execute(sql_update_cot_hdr, (t_tipo, n_proc, obs, m_global, p_iva, cotizacion_id))
+
+                # 3. Recalcular e ítems en lote si se solicita
+                if aplicar_a_items:
+                    cur.execute(sql_get_items, (cotizacion_id,))
+                    items = cur.fetchall()
+
+                    subtotal_acum = 0.0
+                    iva_acum = 0.0
+
+                    for item in items:
+                        item_id, costo_u, cant, trat_iva = item
+                        costo_u = float(costo_u or 0.0)
+                        cant = float(cant or 0.0)
+
+                        # Recálculo de precio de venta: Costo / (1 - Margen%)
+                        f_divisor = 1.0 - (m_global / 100.0)
+                        f_divisor = f_divisor if f_divisor > 0 else 0.01
+                        p_venta_u = costo_u / f_divisor
+                        subtotal_item = p_venta_u * cant
+
+                        # Tratamiento de IVA
+                        if str(trat_iva) == "Exento / Excluido (0%)":
+                            iva_pct_item = 0.0
+                        else:
+                            iva_pct_item = p_iva
+
+                        monto_iva_item = subtotal_item * (iva_pct_item / 100.0)
+
+                        cur.execute(
+                            sql_update_item,
+                            (m_global, iva_pct_item, p_venta_u, subtotal_item, item_id),
+                        )
+
+                        subtotal_acum += subtotal_item
+                        iva_acum += monto_iva_item
+
+                    total_oferta = subtotal_acum + iva_acum
+
+                    # Actualizar totales recalculados de la cotización
+                    cur.execute(
+                        sql_update_totales,
+                        (subtotal_acum, iva_acum, total_oferta, cotizacion_id),
                     )
-                )
+
             conn.commit()
         return True
     except Exception as e:
-        st.error(f"Error al aplicar IVA global a los ítems: {e}")
+        st.error(f"Error actualizando parámetros globales en la BD: {e}")
         return False
 
+    
 def crear_cotizacion_db(
     tipo_cotizacion: str,
     numero_proceso: str,
