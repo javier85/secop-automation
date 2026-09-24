@@ -12,15 +12,18 @@ from database.cotizaciones_db import (
     insertar_item_cotizacion,
     actualizar_parametros_globales_db,
 )
-from database.secop_db import (
-    cargar_licitaciones,
-)
+from database.secop_db import cargar_licitaciones
 from services.excel_service import generar_excel_cotizacion
 
-# Mapeo global de Margen Real -> Factor Divisor (de 0% a 90% en pasos de 5%)
+# Mapeo global de Margen Real -> Factor Divisor
 OPCIONES_MARGEN = {
     f"{p}% Margen Real (÷ {1 - p/100:.2f})": p / 100.0 for p in range(0, 95, 5)
 }
+
+st.set_page_config(
+    page_title="Cotizador SECOP",
+    layout="centered"  # En lugar de layout="wide"
+)
 
 # ==============================================================================
 # MODAL NATIVO: CALCULADORA Y EDICIÓN AVANZADA DE ÍTEM (ANCHO ESTÁNDAR)
@@ -48,7 +51,6 @@ def modal_editar_item(cot_id_sel, item_row, df_items):
             value=str(item_row.get("unidad_medida", "UNIDAD")),
         )
 
-    # --- LECTURA DINÁMICA DEL MODO DE IVA PREVIO ---
     opciones_modo_iva = [
         "Con IVA Incluido",
         "Sin IVA (Antes de IVA)",
@@ -83,10 +85,8 @@ def modal_editar_item(cot_id_sel, item_row, df_items):
         disabled=iva_dis,
     )
 
-    # Determinación estricta de la tarifa de IVA según exención
     edit_tarifa_iva_final = 0.0 if iva_dis else edit_tarifa_iva
 
-    # Cálculo del Costo Base Neto según origen
     if edit_modo_iva == "Con IVA Incluido" and edit_tarifa_iva_final > 0:
         c_base = edit_costo_ingresado / (1 + (edit_tarifa_iva_final / 100.0))
     else:
@@ -144,7 +144,7 @@ def modal_editar_item(cot_id_sel, item_row, df_items):
             st.session_state[tabla_key] = {"selection": {"rows": [], "columns": []}}
             st.rerun()
         else:
-            st.error("Error al guardar en la base de datos.") 
+            st.error("Error al guardar en la base de datos.")
 
 # ==============================================================================
 # MODAL NATIVO: EDICIÓN DE ENCABEZADO Y PARÁMETROS GLOBALES (ANCHO ESTÁNDAR)
@@ -199,12 +199,12 @@ def modal_editar_encabezado(cot_info, cot_id_sel):
             nuevo_margen=nuevo_margen,
             nuevo_iva=nuevo_iva,
             nuevo_tipo=nuevo_tipo,
-            numero_proceso=nuevo_proc,  # <--- Descomentar si deseas guardar la licitación
+            numero_proceso=nuevo_proc,
             observaciones=nuevas_obs,
             aplicar_a_items=True
         )
         if exito:
-            st.toast("✅ Parámetros globales actualizados y totales recalculados en la BD.", icon="🎉")
+            st.toast("✅ Parámetros globales actualizados y totales recalculados.", icon="🎉")
             st.rerun()
         else:
             st.error("Error al actualizar los parámetros en la base de datos.")
@@ -313,7 +313,7 @@ def render_registro_general(df_cot):
             st.rerun()
 
 # ==============================================================================
-# VISTA 2: EDITOR COMPLETO DE COTIZACIÓN (REORGANIZADO)
+# VISTA 2: EDITOR COMPLETO DE COTIZACIÓN
 # ==============================================================================
 def render_card_html(label, value, badge_text=None, card_type="neutral"):
     styles = {
@@ -345,6 +345,21 @@ def render_card_html(label, value, badge_text=None, card_type="neutral"):
 def render_editor_cotizacion(cot_id_sel, df_cot):
     cot_id_sel = int(cot_id_sel)
     cot_match = df_cot[df_cot["id"] == cot_id_sel]
+    
+    # Inyección de CSS para limitar el ancho máximo (Equivalente a max-w-6xl)
+    st.markdown(
+        """
+        <style>
+        .block-container {
+            max-width: 1152px !important; /* Equivalente a max-w-6xl en Tailwind */
+            padding-left: 1.5rem !important;
+            padding-right: 1.5rem !important;
+            margin: 0 auto !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
 
     if cot_match.empty:
         st.error("No se encontró la cotización seleccionada.")
@@ -405,7 +420,6 @@ def render_editor_cotizacion(cot_id_sel, df_cot):
             st.session_state["cot_id_activa"] = opciones_cambio[cot_rapida]
             st.rerun()
 
-    # Encabezado HTML con estado y plazo
     badge_plazo_html = obtener_badge_plazo_html(fecha_limite_proc)
 
     html_header = (
@@ -454,6 +468,7 @@ def render_editor_cotizacion(cot_id_sel, df_cot):
         iva_total_acum = (subtotal_item_serie * (df_items["iva_pct_real"] / 100.0)).sum()
         total_oferta = subtotal_venta + iva_total_acum
     else:
+        iva_hdr_def = 19.0
         costo_total_acum = 0.0
         subtotal_venta = float(cot_info["subtotal"] or 0.0)
         iva_total_acum = float(cot_info["impuesto_iva"] or 0.0)
@@ -462,12 +477,6 @@ def render_editor_cotizacion(cot_id_sel, df_cot):
     utilidad_bruta = subtotal_venta - costo_total_acum
     margen_global_pct = (utilidad_bruta / subtotal_venta * 100.0) if subtotal_venta > 0 else 0.0
 
-    # ==========================================
-    # 3. RESUMEN FINANCIERO DINÁMICO & SIMULADOR
-    # ==========================================
-    st.markdown("##### 📈 Resumen Financiero, Dinámico y Simulador y Comparativa SECOP")
-
-    # --- Extracción y parseo seguro del Presupuesto Oficial ---
     if presupuesto_oficial == 0.0:
         raw_po = cot_info.get("presupuesto") or cot_info.get("presupuesto_oficial")
         try:
@@ -476,46 +485,116 @@ def render_editor_cotizacion(cot_id_sel, df_cot):
         except (ValueError, TypeError):
             presupuesto_oficial = 0.0
 
-    # --- PANEL DEL SIMULADOR DINÁMICO ---
-    with st.expander("🎛️ Simulador Financiero en Tiempo Real (Ajuste Dinámico)", expanded=True):
-        st.caption("Modifica el margen base en pantalla para simular la oferta en tiempo real antes de guardar en la base de datos.")
+    # ==============================================================================
+    # 3. ESTRUCTURA EN PESTAÑAS: RESUMEN REAL Y SIMULADOR SEPARADOS
+    # ==============================================================================
+    tab_resumen, tab_simulador = st.tabs(["📊 Resumen Oficial & Techo SECOP", "🎛️ Simulador y Análisis de Sensibilidad"])
 
-        # 1. Ajuste de Controles a 2 Columnas (Sin IVA Simulado)
-        col_sim1, col_sim2 = st.columns(2)
+    # ------------------------------------------------------------------------------
+    # PESTAÑA 1: RESUMEN OFICIAL REAL Y TECHO SECOP
+    # ------------------------------------------------------------------------------
+    with tab_resumen:
+        st.caption("Métricas financieras oficiales guardadas en la base de datos y comparación directa con el proceso SECOP.")
 
-        with col_sim1:
+        es_inviable = (total_oferta > presupuesto_oficial) if presupuesto_oficial > 0 else False
+        diferencia = presupuesto_oficial - total_oferta
+        monto_diferencia = abs(diferencia)
+        pct_desviacion = (monto_diferencia / presupuesto_oficial * 100.0) if presupuesto_oficial > 0 else 0.0
+
+        if es_inviable:
+            badge_po = f"↓ -${monto_diferencia:,.2f} Exceso (+{pct_desviacion:.1f}%)"
+            tipo_card_po = "red"
+            tipo_card_oferta = "red"
+            badge_oferta = "🚨 INVIABLE (Supera Techo)"
+        else:
+            badge_po = f"↑ +${diferencia:,.2f} Holgura (-{pct_desviacion:.1f}%)" if presupuesto_oficial > 0 else "📌 Sin Techo Oficial"
+            tipo_card_po = "blue"
+            tipo_card_oferta = "green"
+            badge_oferta = "✅ VIABLE (Dentro de Techo)" if presupuesto_oficial > 0 else "ℹ️ Sin Límite Definido"
+
+        # Tarjetas de Proceso y SECOP
+        r1_col1, r1_col2, r1_col3 = st.columns(3)
+        with r1_col1:
+            st.markdown(render_card_html("📋 PROCESO / LICITACIÓN", str(n_proc), badge_text="📄 Código Registrado", card_type="neutral"), unsafe_allow_html=True)
+        with r1_col2:
+            val_po = f"${presupuesto_oficial:,.2f}" if presupuesto_oficial > 0 else "N/A"
+            st.markdown(render_card_html("🏛️ PRESUPUESTO OFICIAL", val_po, badge_text=badge_po, card_type=tipo_card_po), unsafe_allow_html=True)
+        with r1_col3:
+            st.markdown(render_card_html("🚀 TOTAL OFERTA ACTUAL", f"${total_oferta:,.2f}", badge_text=badge_oferta, card_type=tipo_card_oferta), unsafe_allow_html=True)
+
+        # Banner de Viabilidad SECOP (SIN DUPLICAR Presupuesto u Oferta)
+        if es_inviable:
+            st.markdown(
+                f"""
+                <div style="background-color: rgba(239, 68, 68, 0.12); border: 1px solid #ef4444; border-left: 6px solid #ef4444; border-radius: 8px; padding: 12px 16px; margin: 10px 0;">
+                    <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;">
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            <span style="font-size: 1.2rem;">🚨</span>
+                            <strong style="font-size: 0.95rem; color: #f87171;">OFERTA INVIABLE — SUPERACIÓN DE TECHO PRESUPUESTAL SECOP</strong>
+                        </div>
+                        <div style="color: #f87171; font-size: 0.95rem; font-weight: 700;">
+                            Exceso / Sobrecosto: +&#36;{monto_diferencia:,.2f} <span style="font-size: 0.8rem; font-weight: 400;">(+{pct_desviacion:.1f}%)</span>
+                        </div>
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+        elif presupuesto_oficial > 0:
+            st.markdown(
+                f"""
+                <div style="background-color: rgba(34, 197, 94, 0.12); border: 1px solid #22c55e; border-left: 6px solid #22c55e; border-radius: 8px; padding: 12px 16px; margin: 10px 0;">
+                    <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;">
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            <span style="font-size: 1.2rem;">✅</span>
+                            <strong style="font-size: 0.95rem; color: #4ade80;">OFERTA VIABLE — DENTRO DEL TECHO PRESUPUESTAL SECOP</strong>
+                        </div>
+                        <div style="color: #4ade80; font-size: 0.95rem; font-weight: 700;">
+                            Holgura Disponible: &#36;{monto_diferencia:,.2f} <span style="font-size: 0.8rem; font-weight: 400;">(-{pct_desviacion:.1f}%)</span>
+                        </div>
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+
+        # Desglose de Costos e Impuestos Reales
+        r2_col1, r2_col2, r2_col3, r2_col4 = st.columns(4)
+        with r2_col1:
+            st.markdown(render_card_html("📦 COSTO BASE NETO", f"${costo_total_acum:,.2f}", badge_text="📊 Total Insumos", card_type="neutral"), unsafe_allow_html=True)
+        with r2_col2:
+            st.markdown(render_card_html("🏷️ SUBTOTAL VENTA", f"${subtotal_venta:,.2f}", badge_text="💵 Antes de Impuestos", card_type="neutral"), unsafe_allow_html=True)
+        with r2_col3:
+            st.markdown(render_card_html("🏛️ IVA ESTIMADO", f"${iva_total_acum:,.2f}", badge_text="🧾 Impuesto Indirecto", card_type="neutral"), unsafe_allow_html=True)
+        with r2_col4:
+            st.markdown(render_card_html("💰 UTILIDAD BRUTA", f"${utilidad_bruta:,.2f}", badge_text=f"↑ {margen_global_pct:.2f}% Margen Real", card_type="green"), unsafe_allow_html=True)
+
+    # ------------------------------------------------------------------------------
+    # PESTAÑA 2: SIMULADOR Y ANÁLISIS DE SENSIBILIDAD
+    # ------------------------------------------------------------------------------
+    with tab_simulador:
+        st.caption("Ajusta dinámicamente el margen base para comparar el escenario en tiempo real contra los valores actuales.")
+
+        col_margin, _ = st.columns([1, 2])
+        with col_margin:
             sim_margen = st.slider(
                 "Margen Base Simulado (%)",
                 min_value=0.0,
                 max_value=90.0,
                 value=float(cot_info.get("margen_global", 20.0) or 20.0),
                 step=0.5,
+                format="%.2f%%",
                 key=f"sim_margen_{cot_id_sel}"
             )
 
-        with col_sim2:
-            piso_minimo_pct = st.number_input(
-                "Piso Mínimo de Rentabilidad (%)",
-                min_value=0.0,
-                max_value=100.0,
-                value=10.0,
-                step=1.0,
-                help="Rentabilidad mínima exigida para alertar viabilidad financiera del proyecto.",
-                key=f"piso_min_{cot_id_sel}"
-            )
-
-        # --- CÁLCULO DINÁMICO EN MEMORIA PARA LA SIMULACIÓN ---
+        # CÁLCULO DINÁMICO EN MEMORIA
         if not df_items.empty:
             df_sim = df_items.copy()
-            
-            # Recálculo instantáneo por ítem ajustando el margen simulado
             f_div_sim = 1.0 - (sim_margen / 100.0)
             f_div_sim = f_div_sim if f_div_sim > 0 else 0.01
             
             df_sim["p_venta_sim"] = df_sim["costo_unitario"] / f_div_sim
             df_sim["subtotal_sim"] = df_sim["p_venta_sim"] * df_sim["cantidad"]
-            
-            # El IVA se calcula con la tarifa real de cada ítem
             df_sim["iva_monto_sim"] = df_sim["subtotal_sim"] * (df_sim["iva_pct_real"] / 100.0)
 
             sim_costo_total = (df_sim["costo_unitario"] * df_sim["cantidad"]).sum()
@@ -533,291 +612,72 @@ def render_editor_cotizacion(cot_id_sel, df_cot):
         sim_utilidad_bruta = sim_subtotal_venta - sim_costo_total
         sim_margen_real = (sim_utilidad_bruta / sim_subtotal_venta * 100.0) if sim_subtotal_venta > 0 else 0.0
 
-        # --- EVALUACIÓN DE PISO MÍNIMO Y TECHO SECOP ---
-        cumple_piso = sim_margen_real >= piso_minimo_pct
         es_inviable_secop = (sim_total_oferta > presupuesto_oficial) if presupuesto_oficial > 0 else False
         dif_secop = presupuesto_oficial - sim_total_oferta
 
-        # --- MÉRITOS Y MÉTRICAS SIMULADAS CON ESTILO DE TARJETAS HTML ---
-        col_res1, col_res2, col_res3, col_res4 = st.columns(4)
-
-        # Cálculo de badges de variación
-        diff_subtotal = sim_subtotal_venta - subtotal_venta
-        badge_subtotal = f"{'↑ +' if diff_subtotal >= 0 else '↓ '}${diff_subtotal:,.2f}" if abs(diff_subtotal) > 0.01 else "Base Actual"
-
-        diff_iva = sim_iva_total - iva_total_acum
-        badge_iva = f"{'↑ +' if diff_iva >= 0 else '↓ '}${diff_iva:,.2f}" if abs(diff_iva) > 0.01 else "Calculado en BD"
-
-        diff_total = sim_total_oferta - total_oferta
-        badge_total = f"{'↑ +' if diff_total >= 0 else '↓ '}${diff_total:,.2f}" if abs(diff_total) > 0.01 else "Base Actual"
-
-        badge_utilidad = f"{'↑' if cumple_piso else '⚠️'} {sim_margen_real:.1f}% Margen (Piso: {piso_minimo_pct:.1f}%)"
-        card_type_utilidad = "green" if cumple_piso else "red"
-        card_type_total = "red" if es_inviable_secop else "neutral"
-
-        with col_res1:
-            st.markdown(
-                render_card_html(
-                    "SUBTOTAL SIMULADO",
-                    f"${sim_subtotal_venta:,.2f}",
-                    badge_text=badge_subtotal,
-                    card_type="neutral"
-                ),
-                unsafe_allow_html=True
-            )
-
-        with col_res2:
-            st.markdown(
-                render_card_html(
-                    "IVA ESTIMADO",
-                    f"${sim_iva_total:,.2f}",
-                    badge_text=badge_iva,
-                    card_type="neutral"
-                ),
-                unsafe_allow_html=True
-            )
-
-        with col_res3:
-            st.markdown(
-                render_card_html(
-                    "TOTAL OFERTA SIMULADO",
-                    f"${sim_total_oferta:,.2f}",
-                    badge_text=badge_total,
-                    card_type=card_type_total
-                ),
-                unsafe_allow_html=True
-            )
-
-        with col_res4:
-            st.markdown(
-                render_card_html(
-                    "UTILIDAD BRUTA",
-                    f"${sim_utilidad_bruta:,.2f}",
-                    badge_text=badge_utilidad,
-                    card_type=card_type_utilidad
-                ),
-                unsafe_allow_html=True
-            )
-
-        # Alertas de viabilidad
-        if not cumple_piso:
-            st.error(f"⚠️ **Alerta de Piso Mínimo:** La rentabilidad simulada ({sim_margen_real:.2f}%) está por debajo del piso mínimo establecido ({piso_minimo_pct:.2f}%).")
-
+        # ALERTAS EN TIEMPO REAL (Escapamos \$ para que Streamlit no renderice LaTeX corrupto)
         if es_inviable_secop:
-            st.error(f"🚨 **Alerta SECOP:** El total simulado (&#36;{sim_total_oferta:,.2f}) supera el Techo Presupuestal Oficial (&#36;{presupuesto_oficial:,.2f}) por &#36;{abs(dif_secop):,.2f}.")
-
-        # Botón para consolidar los cambios en la BD
-        if st.button("💾 Aplicar Parámetros de la Simulación a la Cotización (BD)", type="primary", use_container_width=True):
-            exito = actualizar_parametros_globales_db(
-                cotizacion_id=cot_id_sel,
-                nuevo_margen=sim_margen,
-                aplicar_a_items=True
+            st.error(
+                f"🚨 **Alerta SECOP:** La oferta simulada (**\${sim_total_oferta:,.2f}**) "
+                f"supera el Techo Presupuestal Oficial (**\${presupuesto_oficial:,.2f}**) "
+                f"por **\${abs(dif_secop):,.2f}**."
             )
-            if exito:
-                st.toast("✅ Parámetros simulados aplicados en la base de datos.", icon="🎉")
-                st.rerun()
-            else:
-                st.error("Error al aplicar la simulación en la base de datos.")
+        elif presupuesto_oficial > 0:
+            st.success(
+                f"✅ **Oferta Viable:** La oferta simulada (**\${sim_total_oferta:,.2f}**) "
+                f"se encuentra dentro del Techo Presupuestal Oficial (**\${presupuesto_oficial:,.2f}**)."
+            )
 
-    es_inviable = (total_oferta > presupuesto_oficial) if presupuesto_oficial > 0 else False
-    diferencia = presupuesto_oficial - total_oferta
-    monto_diferencia = abs(diferencia)
-    pct_desviacion = (monto_diferencia / presupuesto_oficial * 100.0) if presupuesto_oficial > 0 else 0.0
+        # TABLA COMPARATIVA: BD REAL VS SIMULADO
+        st.markdown("##### 🔍 Cuadro Comparativo: Guardado en BD vs. Simulación")
+        
+        diff_subtotal = sim_subtotal_venta - subtotal_venta
+        diff_iva = sim_iva_total - iva_total_acum
+        diff_total = sim_total_oferta - total_oferta
+        diff_utilidad = sim_utilidad_bruta - utilidad_bruta
+        diff_margen = sim_margen_real - margen_global_pct
 
-    if es_inviable:
-        badge_po = f"↓ -${monto_diferencia:,.2f} Exceso (+{pct_desviacion:.1f}%)"
-        tipo_card_po = "red"
-        tipo_card_oferta = "red"
-        badge_oferta = "🚨 INVIABLE (Supera Techo)"
-    else:
-        badge_po = f"↑ +${diferencia:,.2f} Holgura (-{pct_desviacion:.1f}%)" if presupuesto_oficial > 0 else "📌 Sin Techo Oficial"
-        tipo_card_po = "blue"
-        tipo_card_oferta = "green"
-        badge_oferta = "✅ VIABLE (Dentro de Techo)" if presupuesto_oficial > 0 else "ℹ️ Sin Límite Definido"
+        df_comparativo = pd.DataFrame([
+            {
+                "Métrica Financiera": "Subtotal Venta",
+                "Actual (BD)": f"${subtotal_venta:,.2f}",
+                "Escenario Simulado": f"${sim_subtotal_venta:,.2f}",
+                "Variación (Δ)": f"{'+' if diff_subtotal >= 0 else ''}${diff_subtotal:,.2f}"
+            },
+            {
+                "Métrica Financiera": "IVA Estimado",
+                "Actual (BD)": f"${iva_total_acum:,.2f}",
+                "Escenario Simulado": f"${sim_iva_total:,.2f}",
+                "Variación (Δ)": f"{'+' if diff_iva >= 0 else ''}${diff_iva:,.2f}"
+            },
+            {
+                "Métrica Financiera": "Total Oferta",
+                "Actual (BD)": f"${total_oferta:,.2f}",
+                "Escenario Simulado": f"${sim_total_oferta:,.2f}",
+                "Variación (Δ)": f"{'+' if diff_total >= 0 else ''}${diff_total:,.2f}"
+            },
+            {
+                "Métrica Financiera": "Utilidad Bruta",
+                "Actual (BD)": f"${utilidad_bruta:,.2f}",
+                "Escenario Simulado": f"${sim_utilidad_bruta:,.2f}",
+                "Variación (Δ)": f"{'+' if diff_utilidad >= 0 else ''}${diff_utilidad:,.2f}"
+            },
+            {
+                "Métrica Financiera": "Margen Real (%)",
+                "Actual (BD)": f"{margen_global_pct:.2f}%",
+                "Escenario Simulado": f"{sim_margen_real:.2f}%",
+                "Variación (Δ)": f"{'+' if diff_margen >= 0 else ''}{diff_margen:.2f}%"
+            }
+        ])
 
-    # FILA 1 DE TARJETAS (Comparativa SECOP - 3 Columnas)
-    r1_col1, r1_col2, r1_col3 = st.columns(3)
-
-    with r1_col1:
-        st.markdown(
-            render_card_html(
-                "📋 PROCESO / LICITACIÓN", 
-                str(n_proc), 
-                badge_text="📄 Código Registrado", 
-                card_type="neutral"
-            ), 
-            unsafe_allow_html=True
-        )
-
-    with r1_col2:
-        val_po = f"${presupuesto_oficial:,.2f}" if presupuesto_oficial > 0 else "N/A"
-        st.markdown(
-            render_card_html(
-                "🏛️ PRESUPUESTO OFICIAL", 
-                val_po, 
-                badge_text=badge_po, 
-                card_type=tipo_card_po
-            ), 
-            unsafe_allow_html=True
-        )
-
-    with r1_col3:
-        st.markdown(
-            render_card_html(
-                "🚀 TOTAL OFERTA", 
-                f"${total_oferta:,.2f}", 
-                badge_text=badge_oferta, 
-                card_type=tipo_card_oferta
-            ), 
-            unsafe_allow_html=True
-        )
-
-    # ==========================================
-    # BANNER / TARJETA DE VIABILIDAD ESTRUCTURADA
-    # ==========================================
-    if es_inviable:
-        st.markdown(
-            f"""
-            <div style="
-                background-color: rgba(239, 68, 68, 0.12);
-                border: 1px solid #ef4444;
-                border-left: 6px solid #ef4444;
-                border-radius: 8px;
-                padding: 16px;
-                margin: 15px 0;
-                color: #ffffff;
-            ">
-                <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 12px;">
-                    <span style="font-size: 1.3rem;">🚨</span>
-                    <strong style="font-size: 1.05rem; color: #f87171; letter-spacing: 0.5px;">
-                        OFERTA INVIABLE — SUPERACIÓN DE TECHO PRESUPUESTAL
-                    </strong>
-                </div>
-                <div style="
-                    display: grid; 
-                    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); 
-                    gap: 12px; 
-                    background: rgba(0,0,0,0.25); 
-                    padding: 12px 16px; 
-                    border-radius: 6px;
-                ">
-                    <div>
-                        <span style="color: #a0a6b5; font-size: 0.75rem; display: block; text-transform: uppercase; font-weight: 600;">Presupuesto Oficial</span>
-                        <strong style="color: #ffffff; font-size: 1.1rem;">&#36;{presupuesto_oficial:,.2f}</strong>
-                    </div>
-                    <div>
-                        <span style="color: #a0a6b5; font-size: 0.75rem; display: block; text-transform: uppercase; font-weight: 600;">Total Oferta</span>
-                        <strong style="color: #f87171; font-size: 1.1rem;">&#36;{total_oferta:,.2f}</strong>
-                    </div>
-                    <div>
-                        <span style="color: #a0a6b5; font-size: 0.75rem; display: block; text-transform: uppercase; font-weight: 600;">Exceso / Sobrecosto</span>
-                        <strong style="color: #f87171; font-size: 1.1rem;">+&#36;{monto_diferencia:,.2f} <span style="font-size: 0.85rem; font-weight: 400;">(+{pct_desviacion:.1f}%)</span></strong>
-                    </div>
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-    elif presupuesto_oficial > 0:
-        st.markdown(
-            f"""
-            <div style="
-                background-color: rgba(34, 197, 94, 0.12);
-                border: 1px solid #22c55e;
-                border-left: 6px solid #22c55e;
-                border-radius: 8px;
-                padding: 16px;
-                margin: 15px 0;
-                color: #ffffff;
-            ">
-                <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 12px;">
-                    <span style="font-size: 1.3rem;">✅</span>
-                    <strong style="font-size: 1.05rem; color: #4ade80; letter-spacing: 0.5px;">
-                        OFERTA VIABLE — DENTRO DEL TECHO PRESUPUESTAL
-                    </strong>
-                </div>
-                <div style="
-                    display: grid; 
-                    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); 
-                    gap: 12px; 
-                    background: rgba(0,0,0,0.25); 
-                    padding: 12px 16px; 
-                    border-radius: 6px;
-                ">
-                    <div>
-                        <span style="color: #a0a6b5; font-size: 0.75rem; display: block; text-transform: uppercase; font-weight: 600;">Presupuesto Oficial</span>
-                        <strong style="color: #ffffff; font-size: 1.1rem;">&#36;{presupuesto_oficial:,.2f}</strong>
-                    </div>
-                    <div>
-                        <span style="color: #a0a6b5; font-size: 0.75rem; display: block; text-transform: uppercase; font-weight: 600;">Total Oferta</span>
-                        <strong style="color: #4ade80; font-size: 1.1rem;">&#36;{total_oferta:,.2f}</strong>
-                    </div>
-                    <div>
-                        <span style="color: #a0a6b5; font-size: 0.75rem; display: block; text-transform: uppercase; font-weight: 600;">Holgura Disponible</span>
-                        <strong style="color: #4ade80; font-size: 1.1rem;">&#36;{monto_diferencia:,.2f} <span style="font-size: 0.85rem; font-weight: 400;">(-{pct_desviacion:.1f}%)</span></strong>
-                    </div>
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-
-    # FILA 2 DE TARJETAS (Métricas Económicas internas - 4 Columnas)
-    r2_col1, r2_col2, r2_col3, r2_col4 = st.columns(4)
-
-    with r2_col1:
-        st.markdown(
-            render_card_html(
-                "📦 COSTO BASE NETO", 
-                f"${costo_total_acum:,.2f}", 
-                badge_text="📊 Total Insumos", 
-                card_type="neutral"
-            ), 
-            unsafe_allow_html=True
-        )
-
-    with r2_col2:
-        st.markdown(
-            render_card_html(
-                "🏷️ SUBTOTAL VENTA", 
-                f"${subtotal_venta:,.2f}", 
-                badge_text="💵 Antes de Impuestos", 
-                card_type="neutral"
-            ), 
-            unsafe_allow_html=True
-        )
-
-    with r2_col3:
-        st.markdown(
-            render_card_html(
-                "🏛️ IVA ESTIMADO", 
-                f"${iva_total_acum:,.2f}", 
-                badge_text="🧾 Impuesto Indirecto", 
-                card_type="neutral"
-            ), 
-            unsafe_allow_html=True
-        )
-
-    with r2_col4:
-        badge_ub = f"↑ {margen_global_pct:.2f}% Margen Real"
-        st.markdown(
-            render_card_html(
-                "💰 UTILIDAD BRUTA", 
-                f"${utilidad_bruta:,.2f}", 
-                badge_text=badge_ub, 
-                card_type="green"
-            ), 
-            unsafe_allow_html=True
-        )
+        st.dataframe(df_comparativo, use_container_width=True, hide_index=True)
 
     st.markdown("---")
 
-    # 4. PANEL REORGANIZADO DE ACCIONES Y CONTROLES (ESTANDARIZADO Y ALINEADO)
+    # 4. PANEL REORGANIZADO DE ACCIONES Y CONTROLES
     st.markdown("##### ⚙️ Acciones y Gestión de Cotización")
 
-    # FILA 1: Estado de Cotización (Selectbox) y Descargar Excel
     f1_col1, f1_col2 = st.columns(2)
-
     with f1_col1:
         estados_disponibles = ["BORRADOR", "ENVIADA", "APROBADA", "RECHAZADA"]
         idx_est = (
@@ -837,7 +697,6 @@ def render_editor_cotizacion(cot_id_sel, df_cot):
             st.rerun()
 
     with f1_col2:
-        # Compensador visual (28px) para alinear el botón con la caja del selectbox de la izquierda
         st.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True)
         excel_bytes = generar_excel_cotizacion(cot_info.to_dict(), df_items)
         st.download_button(
@@ -849,9 +708,7 @@ def render_editor_cotizacion(cot_id_sel, df_cot):
             key=f"btn_download_{cot_id_sel}",
         )
 
-    # FILA 2: Editar Encabezado y Eliminar Cotización
     f2_col1, f2_col2 = st.columns(2)
-
     with f2_col1:
         if st.button(
             "✏️ Editar Encabezado",
@@ -875,7 +732,7 @@ def render_editor_cotizacion(cot_id_sel, df_cot):
 
     st.markdown("---")
 
-    # 5. TABLA DE ÍTEMS CON BARRA INTEGRADA
+    # 5. TABLA DE ÍTEMS
     col_hdr_tbl, col_btn_tbl = st.columns([3, 1])
     with col_hdr_tbl:
         st.markdown(f"#### 📦 Ítems Incluidos ({len(df_items)} ítems)")
@@ -989,4 +846,3 @@ def obtener_badge_plazo_html(fecha_limite_val):
             f'<span style="margin-left: 6px; background: #2e7d32; color: #ffffff; padding: 1px 6px; border-radius: 4px; font-size: 0.75rem;">Vigente (Quedan {dias} días {horas} h)</span>'
             f'</span></div>'
         )
-  
