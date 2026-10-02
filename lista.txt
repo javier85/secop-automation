@@ -1,0 +1,39 @@
+﻿Listado de rutas de carpetas
+C:\Orqidea_Project\secop-automation
+|   docker-compose.yml
++---licita-app
+|   |   app.py
+|   |   config.py
+|   |   Dockerfile
+|   |   requirements.txt
+|   |   
+|   +---components
+|   |       ui_components.py
+|   |       
+|   +---database
+|   |       connection.py
+|   |       cotizaciones_db.py
+|   |       secop_db.py
+|   |         
+|   +---services
+|   |       ai_service.py
+|   |       excel_service.py
+|   |       filesystem_service.py
+|   |       n8n_service.py
+|   |       playwright_service.py
+|   |       
+|   +---utils
+|   |       cotizacion_utils.py
+|   |       helpers.py
+|   |       __init__.py
+|   |       
+|   \---views
+|           tab_analisis_licitacion.py
+|           tab_banco_items.py
+|           tab_historico.py
+|           tab_homologador.py
+|           tab_ingesta_manual.py
+|           tab_nueva_cotiz.py
+|           tab_secop.py
+|           _init__.py
+|           
